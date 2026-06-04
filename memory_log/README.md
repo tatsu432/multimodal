@@ -150,7 +150,7 @@ Run summary:
 
 ## Next step
 
-Keyword and time-based memory search over `memories.jsonl`.
+Keyword and time-based memory search: see [`../memory_search/README.md`](../memory_search/README.md).
 
 ## Relation to Step 1
 

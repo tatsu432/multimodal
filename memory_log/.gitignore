@@ -5,4 +5,4 @@ __pycache__/
 outputs/frames/*.jpg
 outputs/frames/*.jpeg
 outputs/frames/*.png
-outputs/memories.jsonl
+!outputs/memories.jsonl
