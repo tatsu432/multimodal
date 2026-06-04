@@ -1,11 +1,12 @@
 import logging
+import time
 from abc import ABC, abstractmethod
 
 import numpy as np
 from openai import OpenAI
 
 from src.config import Config
-from src.utils import encode_frame_as_base64_jpeg, parse_vlm_memory_analysis
+from src.utils import FrameItem, encode_frame_as_base64_jpeg, parse_vlm_memory_analysis
 
 logger = logging.getLogger("memory_log.vlm")
 
@@ -39,6 +40,15 @@ SOURCE_PROMPTS = {
 
 class VLMClient(ABC):
     @abstractmethod
+    def answer_question(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> str:
+        ...
+
+    @abstractmethod
     def analyze_frame_for_memory(self, frame: np.ndarray) -> dict | None:
         ...
 
@@ -55,6 +65,69 @@ class OpenAIVLMClient(VLMClient):
         self.feed_description = SOURCE_PROMPTS.get(
             frame_source_type, "a live camera feed"
         )
+
+    def answer_question(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> str:
+        if not frames:
+            return "No frames are available yet. Wait a few seconds and ask again."
+
+        content: list[dict] = [
+            {
+                "type": "input_text",
+                "text": (
+                    f"You are answering questions about {self.feed_description}. "
+                    "Use only the visual evidence in the provided recent frames. "
+                    "If the answer is uncertain or not visible, say that clearly. "
+                    "Be concise but specific.\n\n"
+                    f"User question: {question}"
+                ),
+            }
+        ]
+
+        for i, frame in enumerate(frames):
+            if frame_items and i < len(frame_items):
+                age_sec = time.time() - frame_items[i].timestamp
+                content.append(
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago."
+                        ),
+                    }
+                )
+            else:
+                content.append(
+                    {
+                        "type": "input_text",
+                        "text": f"Frame {i + 1}.",
+                    }
+                )
+
+            b64 = encode_frame_as_base64_jpeg(frame)
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{b64}",
+                }
+            )
+
+        logger.info(
+            "Calling VLM model=%s for Q&A with %d frame(s)", self.model, len(frames)
+        )
+        response = self.client.responses.create(
+            model=self.model,
+            input=[
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+        )
+        return response.output_text
 
     def analyze_frame_for_memory(self, frame: np.ndarray) -> dict | None:
         b64 = encode_frame_as_base64_jpeg(frame)

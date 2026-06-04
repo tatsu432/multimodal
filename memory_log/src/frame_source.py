@@ -1,12 +1,15 @@
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from src.config import Config
+from src.utils import FrameItem, LiveFrameBuffer
 
 logger = logging.getLogger("memory_log.capture")
 
@@ -31,7 +34,19 @@ def open_video_capture(source: str | int) -> cv2.VideoCapture:
 
 class FrameSource(ABC):
     @abstractmethod
+    def start(self) -> None:
+        ...
+
+    @abstractmethod
+    def stop(self) -> None:
+        ...
+
+    @abstractmethod
     def read(self) -> tuple[bool, np.ndarray | None]:
+        ...
+
+    @abstractmethod
+    def get_recent(self, n: int) -> list[np.ndarray]:
         ...
 
     @abstractmethod
@@ -39,143 +54,243 @@ class FrameSource(ABC):
         ...
 
 
-class _OpenCVFrameSource(FrameSource):
-    """Shared read/reconnect logic for RTMP, webcam, and video file sources."""
+class _ThreadedFrameSource(FrameSource):
+    """Base for sources that sample frames in a background thread."""
 
-    def __init__(self, source_label: str, *, end_of_stream: bool = False):
+    def __init__(
+        self,
+        buffer_size: int,
+        sample_interval_sec: float,
+        source_label: str,
+    ):
+        self.buffer = LiveFrameBuffer(max_frames=buffer_size)
+        self.sample_interval_sec = sample_interval_sec
         self.source_label = source_label
-        self.end_of_stream = end_of_stream
-        self._cap: cv2.VideoCapture | None = None
-        self._stopped = False
-        self._stream_ended = False
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._cap_lock = threading.Lock()
+        self._active_cap: cv2.VideoCapture | None = None
 
-    @property
-    def stream_ended(self) -> bool:
-        return self._stream_ended
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._capture_loop,
+            name=f"capture-{self.source_label}",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("Started %s capture thread", self.source_label)
 
-    def _ensure_open(self) -> bool:
-        if self._stopped:
-            return False
-
-        if self._cap is not None and self._cap.isOpened():
-            return True
-
-        self._open_capture()
-        return self._cap is not None and self._cap.isOpened()
-
-    @abstractmethod
-    def _open_capture(self) -> None:
-        ...
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._interrupt_active_capture()
 
     def read(self) -> tuple[bool, np.ndarray | None]:
-        if self._stopped or self._stream_ended:
+        frame = self.buffer.latest_frame()
+        if frame is None:
             return False, None
+        return True, frame
 
-        consecutive_failures = 0
+    def get_recent(self, n: int) -> list[np.ndarray]:
+        return self.buffer.get_recent_frames(n)
 
-        while not self._stopped and not self._stream_ended:
-            if not self._ensure_open():
-                time.sleep(OPEN_RETRY_SLEEP_SEC)
-                consecutive_failures += 1
-                if consecutive_failures >= MAX_CONSECUTIVE_READ_FAILURES:
-                    return False, None
-                continue
-
-            ok, frame = self._cap.read()  # type: ignore[union-attr]
-
-            if ok and frame is not None and frame.size > 0:
-                return True, frame
-
-            consecutive_failures += 1
-            if consecutive_failures < MAX_CONSECUTIVE_READ_FAILURES:
-                time.sleep(READ_RETRY_SLEEP_SEC)
-                continue
-
-            if self.end_of_stream:
-                logger.info("End of %s stream", self.source_label)
-                self._stream_ended = True
-                self._release_cap()
-                return False, None
-
-            logger.warning(
-                "Sustained read failures on %s; reconnecting",
-                self.source_label,
-            )
-            self._release_cap()
-            consecutive_failures = 0
-
-        return False, None
-
-    def _release_cap(self) -> None:
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+    def get_recent_items(self, n: int) -> list[FrameItem]:
+        return self.buffer.get_recent_items(n)
 
     def release(self) -> None:
-        self._stopped = True
-        self._release_cap()
+        self.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+            self._thread = None
+        with self._cap_lock:
+            if self._active_cap is not None:
+                self._active_cap.release()
+                self._active_cap = None
         logger.info("Released %s frame source", self.source_label)
 
+    def _interrupt_active_capture(self) -> None:
+        with self._cap_lock:
+            if self._active_cap is not None:
+                self._active_cap.release()
+                self._active_cap = None
 
-class RTMPFrameSource(_OpenCVFrameSource):
-    def __init__(self, rtmp_url: str):
-        super().__init__("rtmp")
+    def _register_capture(self, cap: cv2.VideoCapture) -> None:
+        with self._cap_lock:
+            self._active_cap = cap
+
+    def _unregister_capture(self, cap: cv2.VideoCapture) -> None:
+        with self._cap_lock:
+            if self._active_cap is cap:
+                cap.release()
+                self._active_cap = None
+
+    def _run_capture_session(
+        self,
+        cap: cv2.VideoCapture,
+        *,
+        end_of_stream: bool = False,
+    ) -> bool:
+        self._register_capture(cap)
+        last_sample_time = 0.0
+        consecutive_failures = 0
+        reopen = False
+
+        try:
+            while not self._stop_event.is_set():
+                ok, frame = cap.read()
+
+                if not ok:
+                    consecutive_failures += 1
+                    if consecutive_failures < MAX_CONSECUTIVE_READ_FAILURES:
+                        time.sleep(READ_RETRY_SLEEP_SEC)
+                        continue
+
+                    if end_of_stream:
+                        logger.info("End of stream reached")
+                        reopen = True
+                    else:
+                        logger.warning(
+                            "Sustained read failures on %s (%d attempts), reconnecting",
+                            self.source_label,
+                            consecutive_failures,
+                        )
+                        reopen = True
+                    break
+
+                consecutive_failures = 0
+                now = time.time()
+                if now - last_sample_time >= self.sample_interval_sec:
+                    last_sample_time = now
+                    self.buffer.add(frame)
+                    logger.debug(
+                        "Sampled %s frame into buffer (size=%d)",
+                        self.source_label,
+                        len(self.buffer),
+                    )
+        finally:
+            self._unregister_capture(cap)
+
+        return reopen
+
+    def _capture_loop_with_opener(
+        self,
+        open_capture: Callable[[], cv2.VideoCapture],
+        *,
+        end_of_stream: bool = False,
+        open_failure_message: str,
+    ) -> None:
+        while not self._stop_event.is_set():
+            cap = open_capture()
+
+            if not cap.isOpened():
+                logger.warning(open_failure_message)
+                time.sleep(OPEN_RETRY_SLEEP_SEC)
+                continue
+
+            logger.info("%s opened", self.source_label)
+            reopen = self._run_capture_session(cap, end_of_stream=end_of_stream)
+
+            if not reopen and self._stop_event.is_set():
+                break
+
+    @abstractmethod
+    def _capture_loop(self) -> None:
+        ...
+
+
+class RTMPFrameSource(_ThreadedFrameSource):
+    def __init__(self, rtmp_url: str, buffer_size: int, sample_interval_sec: float):
+        super().__init__(buffer_size, sample_interval_sec, "rtmp")
         self.rtmp_url = rtmp_url
 
-    def _open_capture(self) -> None:
+    def _capture_loop(self) -> None:
         logger.info("Opening RTMP stream: %s", self.rtmp_url)
-        self._release_cap()
-        self._cap = open_video_capture(self.rtmp_url)
-        if not self._cap.isOpened():
-            logger.warning(
-                "Could not open RTMP stream %s. Retrying in %.0f seconds...",
-                self.rtmp_url,
-                OPEN_RETRY_SLEEP_SEC,
-            )
+
+        def open_capture() -> cv2.VideoCapture:
+            return open_video_capture(self.rtmp_url)
+
+        self._capture_loop_with_opener(
+            open_capture,
+            open_failure_message=(
+                f"Could not open RTMP stream {self.rtmp_url}. Retrying in "
+                f"{OPEN_RETRY_SLEEP_SEC:.0f} seconds..."
+            ),
+        )
 
 
-class WebcamFrameSource(_OpenCVFrameSource):
-    def __init__(self, webcam_index: int):
-        super().__init__("webcam")
+class WebcamFrameSource(_ThreadedFrameSource):
+    def __init__(
+        self,
+        webcam_index: int,
+        buffer_size: int,
+        sample_interval_sec: float,
+    ):
+        super().__init__(buffer_size, sample_interval_sec, "webcam")
         self.webcam_index = webcam_index
 
-    def _open_capture(self) -> None:
+    def _capture_loop(self) -> None:
         logger.info("Opening webcam index %d", self.webcam_index)
-        self._release_cap()
-        self._cap = open_video_capture(self.webcam_index)
-        if not self._cap.isOpened():
-            logger.warning(
-                "Could not open webcam %d. Retrying in %.0f seconds...",
-                self.webcam_index,
-                OPEN_RETRY_SLEEP_SEC,
-            )
+
+        def open_capture() -> cv2.VideoCapture:
+            return open_video_capture(self.webcam_index)
+
+        self._capture_loop_with_opener(
+            open_capture,
+            open_failure_message=(
+                f"Could not open webcam {self.webcam_index}. Retrying in "
+                f"{OPEN_RETRY_SLEEP_SEC:.0f} seconds..."
+            ),
+        )
 
 
-class VideoFileFrameSource(_OpenCVFrameSource):
-    def __init__(self, video_path: str):
-        super().__init__("video", end_of_stream=True)
+class VideoFileFrameSource(_ThreadedFrameSource):
+    def __init__(
+        self,
+        video_path: str,
+        buffer_size: int,
+        sample_interval_sec: float,
+    ):
+        super().__init__(buffer_size, sample_interval_sec, "video")
         self.video_path = Path(video_path)
 
-    def _open_capture(self) -> None:
+    def _capture_loop(self) -> None:
         logger.info("Opening video file: %s", self.video_path)
-        self._release_cap()
-        self._cap = open_video_capture(str(self.video_path))
-        if not self._cap.isOpened():
-            logger.warning(
-                "Could not open video file %s. Retrying in %.0f seconds...",
-                self.video_path,
-                OPEN_RETRY_SLEEP_SEC,
-            )
+
+        def open_capture() -> cv2.VideoCapture:
+            return open_video_capture(str(self.video_path))
+
+        self._capture_loop_with_opener(
+            open_capture,
+            end_of_stream=True,
+            open_failure_message=(
+                f"Could not open video file {self.video_path}. Retrying in "
+                f"{OPEN_RETRY_SLEEP_SEC:.0f} seconds..."
+            ),
+        )
 
 
 def create_frame_source(config: Config) -> FrameSource:
     if config.frame_source_type == "rtmp":
-        return RTMPFrameSource(rtmp_url=config.rtmp_url)
+        return RTMPFrameSource(
+            rtmp_url=config.rtmp_url,
+            buffer_size=config.frame_buffer_size,
+            sample_interval_sec=config.capture_sample_interval_sec,
+        )
 
     if config.frame_source_type == "webcam":
-        return WebcamFrameSource(webcam_index=config.webcam_index)
+        return WebcamFrameSource(
+            webcam_index=config.webcam_index,
+            buffer_size=config.frame_buffer_size,
+            sample_interval_sec=config.capture_sample_interval_sec,
+        )
 
     if config.frame_source_type == "video":
-        return VideoFileFrameSource(video_path=config.video_path)
+        return VideoFileFrameSource(
+            video_path=config.video_path,
+            buffer_size=config.frame_buffer_size,
+            sample_interval_sec=config.capture_sample_interval_sec,
+        )
 
     raise ValueError(f"Unsupported frame source type: {config.frame_source_type}")

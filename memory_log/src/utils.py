@@ -2,10 +2,13 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime, timezone
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
-from zoneinfo import ZoneInfo
+from typing import Any, Deque
 
 import cv2
 import numpy as np
@@ -28,8 +31,48 @@ def parse_optional_float_env(value: str) -> float | None:
     return float(stripped)
 
 
-def local_timezone() -> ZoneInfo:
-    return datetime.now().astimezone().tzinfo or timezone.utc  # type: ignore[return-value]
+@dataclass
+class FrameItem:
+    timestamp: float
+    frame: np.ndarray
+
+
+class LiveFrameBuffer:
+    def __init__(self, max_frames: int = 8):
+        self.frames: Deque[FrameItem] = deque(maxlen=max_frames)
+        self.lock = threading.Lock()
+
+    def add(self, frame: np.ndarray) -> None:
+        frame_copy = frame.copy()
+        with self.lock:
+            self.frames.append(FrameItem(timestamp=time.time(), frame=frame_copy))
+
+    def get_latest_items(self) -> list[FrameItem]:
+        with self.lock:
+            return list(self.frames)
+
+    def get_recent_frames(self, n: int) -> list[np.ndarray]:
+        items = self.get_latest_items()
+        if not items:
+            return []
+        selected = items[-n:]
+        return [item.frame for item in selected]
+
+    def get_recent_items(self, n: int) -> list[FrameItem]:
+        items = self.get_latest_items()
+        if not items:
+            return []
+        return items[-n:]
+
+    def latest_frame(self) -> np.ndarray | None:
+        items = self.get_latest_items()
+        if not items:
+            return None
+        return items[-1].frame.copy()
+
+    def __len__(self) -> int:
+        with self.lock:
+            return len(self.frames)
 
 
 def make_memory_id(now: datetime | None = None) -> tuple[str, str, datetime]:

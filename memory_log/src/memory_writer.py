@@ -24,18 +24,23 @@ class MemoryWriter:
         if not self.memory_jsonl_path.exists():
             self.memory_jsonl_path.touch()
 
-    def save_memory(self, frame: np.ndarray, analysis: dict) -> MemoryRecord:
+    def save_memory(
+        self,
+        frame: np.ndarray,
+        analysis: dict,
+        user_question: str,
+    ) -> MemoryRecord:
         memory_id, timestamp, _ = make_memory_id()
 
         image_path = ""
-        if self.config.save_frames:
+        if self.config.save_frames and analysis["should_store"]:
             saved = save_frame_image(
                 frame,
                 self.output_frame_dir,
                 memory_id,
             )
             image_path = relative_path(saved, PROJECT_ROOT)
-        else:
+        elif analysis["should_store"]:
             image_path = relative_path(
                 self.output_frame_dir / f"{memory_id}.jpg",
                 PROJECT_ROOT,
@@ -56,6 +61,7 @@ class MemoryWriter:
             memory_id=memory_id,
             timestamp=timestamp,
             image_path=image_path,
+            user_question=user_question,
             summary=analysis["summary"],
             objects=analysis["objects"],
             scene_type=analysis["scene_type"],
@@ -67,7 +73,13 @@ class MemoryWriter:
             privacy_risk=analysis["privacy_risk"],
         )
 
-        self._append_jsonl(record)
+        if record.should_store:
+            self._append_jsonl(record)
+        else:
+            logger.info(
+                "Skipped JSONL append for %s (should_store=false)", record.memory_id
+            )
+
         return record
 
     def _append_jsonl(self, record: MemoryRecord) -> None:

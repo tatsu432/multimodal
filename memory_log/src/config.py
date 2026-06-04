@@ -20,7 +20,9 @@ class Config:
     vlm_provider: str
     vlm_model: str
     openai_api_key: str
-    frame_sample_interval_seconds: float
+    frame_buffer_size: int
+    capture_sample_interval_sec: float
+    num_frames_per_query: int
     output_frame_dir: Path
     memory_jsonl_path: Path
     location_label: str | None
@@ -56,9 +58,11 @@ class Config:
             vlm_provider=os.getenv("VLM_PROVIDER", "openai").strip().lower(),
             vlm_model=os.getenv("VLM_MODEL", "gpt-5.5"),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-            frame_sample_interval_seconds=float(
-                os.getenv("FRAME_SAMPLE_INTERVAL_SECONDS", "3")
+            frame_buffer_size=int(os.getenv("FRAME_BUFFER_SIZE", "8")),
+            capture_sample_interval_sec=float(
+                os.getenv("CAPTURE_SAMPLE_INTERVAL_SEC", "1.0")
             ),
+            num_frames_per_query=int(os.getenv("NUM_FRAMES_PER_QUERY", "1")),
             output_frame_dir=output_frame_dir,
             memory_jsonl_path=memory_jsonl_path,
             location_label=location_label,
@@ -96,10 +100,14 @@ class Config:
                 "OPENAI_API_KEY is required. Copy .env.example to .env and set your key."
             )
 
-        if self.frame_sample_interval_seconds <= 0:
-            raise ValueError(
-                "FRAME_SAMPLE_INTERVAL_SECONDS must be positive"
-            )
+        if self.frame_buffer_size < 1:
+            raise ValueError("FRAME_BUFFER_SIZE must be at least 1")
+
+        if self.capture_sample_interval_sec <= 0:
+            raise ValueError("CAPTURE_SAMPLE_INTERVAL_SEC must be positive")
+
+        if self.num_frames_per_query < 1:
+            raise ValueError("NUM_FRAMES_PER_QUERY must be at least 1")
 
         if (
             self.max_runtime_seconds is not None

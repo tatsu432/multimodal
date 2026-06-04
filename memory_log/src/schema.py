@@ -29,6 +29,7 @@ class MemoryRecord(BaseModel):
     memory_id: str
     timestamp: str
     image_path: str
+    user_question: str
     summary: str
     objects: list[str]
     scene_type: str
