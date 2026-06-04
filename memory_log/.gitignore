@@ -1,0 +1,8 @@
+.env
+.venv
+__pycache__/
+*.py[cod]
+outputs/frames/*.jpg
+outputs/frames/*.jpeg
+outputs/frames/*.png
+outputs/memories.jsonl
