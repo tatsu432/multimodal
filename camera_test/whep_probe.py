@@ -90,8 +90,8 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=15.0,
-        help="ICE connection timeout (seconds)",
+        default=30.0,
+        help="WebRTC connection timeout (seconds)",
     )
     parser.add_argument(
         "--ice-servers",

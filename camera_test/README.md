@@ -57,7 +57,7 @@ Set these in `camera_test/.env` (see [.env.example](.env.example)):
 | `RTSP_URL` | `rtsp://localhost:8554/live/gopro` | Used when source type is `rtsp` |
 | `WEBRTC_URL` | `http://localhost:8889/live/whep` | WHEP endpoint when source type is `webrtc` |
 | `WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | Optional comma-separated STUN/TURN URLs |
-| `WEBRTC_OPEN_TIMEOUT_SEC` | `15` | Seconds to wait for WHEP connect + first frame |
+| `WEBRTC_OPEN_TIMEOUT_SEC` | `30` | Seconds to wait for WHEP connect + first frame |
 | `WEBRTC_IPC` | `subprocess` | `subprocess` (default) runs aiortc in a child process; `inprocess` for debugging |
 | `WEBCAM_INDEX` | `0` | Webcam device index |
 | `VIDEO_PATH` | — | Required when `FRAME_SOURCE_TYPE=video` |
@@ -432,6 +432,28 @@ Checklist:
 5. Increase timeout: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
 6. Confirm MediaMTX >= 1.18.2 for improved non-trickle WHEP support.
 7. Inspect OPTIONS: `curl -i -X OPTIONS http://localhost:8889/tapo/whep`
+
+**Probe stuck at `ice=checking, connection=connecting`**
+
+WHEP POST succeeded but WebRTC never finishes ICE. Browser can work while aiortc stalls here.
+
+1. Add to `mediamtx.yml` (see [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml)):
+   - `webrtcAdditionalHosts: [127.0.0.1]` (+ your Mac LAN IP)
+   - `webrtcLocalTCPAddress: :8190` (TCP ICE fallback when UDP 8189 is blocked)
+2. Restart MediaMTX after editing config.
+3. Re-run probe with longer timeout: `uv run camera-whep-probe --timeout 45`
+4. Confirm MediaMTX log shows `listener opened on :8889 (HTTP), :8189 (ICE/UDP)` and TCP if enabled.
+
+**Preview error: `Failed to run python -m pip list`**
+
+Usually means the WHEP **worker subprocess** started with the wrong Python (e.g. IDE Run button instead of `uv run`). Fix:
+
+```bash
+cd camera_test
+uv run camera-preview --source-type webrtc
+```
+
+`camera_test` launches the worker via `uv run ... whep_worker.py` when `uv` is on PATH. If it still fails, set `WEBRTC_IPC=inprocess` temporarily to debug (may show the macOS FFmpeg warning).
 
 **WebRTC preview is laggy (~0.5–1 s)**
 

@@ -5,16 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_CAMERA_TEST_DIR = Path(__file__).resolve().parent
+_WHEP_WORKER_SCRIPT = _CAMERA_TEST_DIR / "whep_worker.py"
 
 _FRAME_MAGIC = b"WFRM"
 _ERROR_MAGIC = b"WERR"
@@ -24,6 +29,46 @@ _HEADER = struct.Struct(">4sIII")
 def _use_subprocess_ipc() -> bool:
     mode = os.getenv("WEBRTC_IPC", "subprocess").strip().lower()
     return mode != "inprocess"
+
+
+def _build_worker_command(
+    whep_url: str,
+    open_timeout_sec: float,
+    ice_servers_env: str | None,
+) -> list[str]:
+    """
+    Build a command that runs whep_worker with the same deps as camera_test.
+
+    Prefer `uv run` so the worker works even when the parent was started from an
+    IDE (avoids wrong-interpreter / pip-list environment errors).
+    """
+    args = [
+        "--url",
+        whep_url,
+        "--timeout",
+        str(open_timeout_sec),
+        "--ice-servers",
+        ice_servers_env or "",
+    ]
+    uv = shutil.which("uv")
+    if uv:
+        return [
+            uv,
+            "run",
+            "--directory",
+            str(_CAMERA_TEST_DIR),
+            "python",
+            str(_WHEP_WORKER_SCRIPT),
+            *args,
+        ]
+
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        py = Path(venv) / "bin" / "python3"
+        if py.is_file():
+            return [str(py), str(_WHEP_WORKER_SCRIPT), *args]
+
+    return [sys.executable, str(_WHEP_WORKER_SCRIPT), *args]
 
 
 class _InProcessWebRTCCapture:
@@ -132,28 +177,26 @@ class _SubprocessWebRTCCapture:
         self._opened = False
         self._error: str | None = None
         self._stop = threading.Event()
+        self._stderr_tail = ""
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "whep_worker",
-            "--url",
-            whep_url,
-            "--timeout",
-            str(open_timeout_sec),
-            "--ice-servers",
-            ice_servers_env or "",
-        ]
+        cmd = _build_worker_command(whep_url, open_timeout_sec, ice_servers_env)
+        env = os.environ.copy()
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            cwd=str(_CAMERA_TEST_DIR),
+            env=env,
         )
 
-        self._reader = threading.Thread(
+        self._stderr_reader = threading.Thread(
+            target=self._stderr_loop, name="whep-stderr-reader", daemon=True
+        )
+        self._stdout_reader = threading.Thread(
             target=self._read_loop, name="whep-stdout-reader", daemon=True
         )
-        self._reader.start()
+        self._stderr_reader.start()
+        self._stdout_reader.start()
         self._wait_until_open()
 
     def _wait_until_open(self) -> None:
@@ -168,13 +211,24 @@ class _SubprocessWebRTCCapture:
             time.sleep(0.05)
 
         if not self._opened and self._error is None:
-            stderr = ""
-            if self._proc.stderr is not None:
-                stderr = self._proc.stderr.read().decode("utf-8", errors="replace")
+            hint = self._stderr_tail.strip()
             self._error = (
                 f"WHEP worker did not deliver a frame within {self._open_timeout_sec:.0f}s"
-                + (f"\n{stderr}" if stderr else "")
+                + (f"\n{hint}" if hint else "")
             )
+
+    def _stderr_loop(self) -> None:
+        stderr = self._proc.stderr
+        if stderr is None:
+            return
+        lines: list[str] = []
+        for raw in iter(stderr.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if line:
+                lines.append(line)
+                if len(lines) > 40:
+                    lines.pop(0)
+                self._stderr_tail = "\n".join(lines)
 
     def _read_loop(self) -> None:
         stdout = self._proc.stdout
@@ -187,7 +241,10 @@ class _SubprocessWebRTCCapture:
             if not header_bytes or len(header_bytes) < _HEADER.size:
                 if self._proc.poll() is not None and not self._opened:
                     if self._error is None:
+                        hint = self._stderr_tail.strip()
                         self._error = "WHEP worker exited before delivering frames"
+                        if hint:
+                            self._error += f"\n{hint}"
                 break
 
             magic, height, width, length = _HEADER.unpack(header_bytes)

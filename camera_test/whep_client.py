@@ -20,8 +20,9 @@ from aiortc import (
 logger = logging.getLogger(__name__)
 
 _LINK_ICE_SERVER_RE = re.compile(
-    r'^<(.+?)>; rel="ice-server"'
-    r'(?:; username="(.*?)"; credential="(.*?)"; credential-type="password")?',
+    r'^<([^>]+)>;\s*rel=["\']?ice-server["\']?'
+    r'(?:;\s*username="(.*?)";\s*credential="(.*?)";\s*credential-type="password")?',
+    re.IGNORECASE,
 )
 
 
@@ -128,33 +129,47 @@ async def wait_for_ice_connected(
     pc: RTCPeerConnection,
     timeout_sec: float,
 ) -> None:
-    if pc.iceConnectionState in {"connected", "completed"}:
+    """Wait until WebRTC peer connection is ready (ICE + DTLS)."""
+    if pc.connectionState == "connected":
         return
 
     done = asyncio.Event()
     failed = False
 
+    @pc.on("connectionstatechange")
+    def on_connection_state_change() -> None:
+        nonlocal failed
+        if pc.connectionState == "connected":
+            done.set()
+        elif pc.connectionState == "failed":
+            failed = True
+            done.set()
+
     @pc.on("iceconnectionstatechange")
     def on_ice_connection_state_change() -> None:
         nonlocal failed
-        state = pc.iceConnectionState
-        if state in {"connected", "completed"}:
-            done.set()
-        elif state == "failed":
+        if pc.iceConnectionState == "failed":
             failed = True
+            done.set()
+        elif (
+            pc.iceConnectionState in {"connected", "completed"}
+            and pc.connectionState == "connected"
+        ):
             done.set()
 
     try:
         await asyncio.wait_for(done.wait(), timeout=timeout_sec)
     except asyncio.TimeoutError as exc:
         raise RuntimeError(
-            f"ICE connection timed out after {timeout_sec:.0f}s "
-            f"({connection_state_summary(pc)})"
+            f"WebRTC peer connection timed out after {timeout_sec:.0f}s "
+            f"({connection_state_summary(pc)}). "
+            "If ice stays 'checking', ensure MediaMTX UDP 8189 is reachable or set "
+            "webrtcLocalTCPAddress in mediamtx.yml (see mediamtx-tapo.example.yml)."
         ) from exc
 
     if failed:
         raise RuntimeError(
-            f"ICE connection failed ({connection_state_summary(pc)})"
+            f"WebRTC peer connection failed ({connection_state_summary(pc)})"
         )
 
 

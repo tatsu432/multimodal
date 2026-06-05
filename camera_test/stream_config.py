@@ -217,7 +217,7 @@ def open_source(source_type: str, target: str | int):
     if source_type == "webrtc":
         from webrtc_capture import WebRTCCapture
 
-        timeout = float(os.getenv("WEBRTC_OPEN_TIMEOUT_SEC", "15"))
+        timeout = float(os.getenv("WEBRTC_OPEN_TIMEOUT_SEC", "30"))
         return WebRTCCapture(
             str(target),
             ice_servers_env=os.getenv("WEBRTC_ICE_SERVERS"),

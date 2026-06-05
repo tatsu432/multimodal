@@ -10,8 +10,8 @@ webrtcAdditionalHosts:
   - 127.0.0.1
   # - 192.168.1.100   # uncomment your Mac's LAN IP if ICE fails
 
-# If UDP 8189 is blocked, enable TCP ICE fallback:
-# webrtcLocalTCPAddress: :8190
+# aiortc often needs TCP ICE when UDP 8189 is blocked (common cause of ice=checking forever):
+webrtcLocalTCPAddress: :8190
 
 paths:
   tapo:
