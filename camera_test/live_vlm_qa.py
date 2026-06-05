@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from providers.ollama import chat as ollama_chat
 
-from stream_config import add_source_args, open_source, resolve_source, source_description
+from stream_config import add_source_args, open_source, read_frame, resolve_source, source_description
 
 
 @dataclass
@@ -66,8 +66,9 @@ def encode_frame_as_base64_jpeg(
 
 
 def capture_stream_loop(
+    camera: str,
     source_type: str,
-    target: str | int,
+    target: str,
     buffer: LiveFrameBuffer,
     stop_event: threading.Event,
     sample_interval_sec: float = 1.0,
@@ -75,7 +76,7 @@ def capture_stream_loop(
     """
     Continuously reads frames from the configured source and stores recent samples.
     """
-    label = source_description(source_type, target)
+    label = source_description(camera, source_type, target)
     print(f"[capture] Opening {label}")
 
     while not stop_event.is_set():
@@ -90,13 +91,9 @@ def capture_stream_loop(
         last_sample_time = 0.0
 
         while not stop_event.is_set():
-            ok, frame = cap.read()
+            ok, frame = read_frame(cap, source_type)
 
             if not ok:
-                if source_type == "video":
-                    print("[capture] End of video reached. Looping...")
-                    break
-
                 print("[capture] Failed to read frame. Reconnecting...")
                 break
 
@@ -112,7 +109,7 @@ def capture_stream_loop(
 def _build_question_prompt(question: str, frames: List[FrameItem]) -> tuple[str, list[str]]:
     prompt_parts = [
         (
-            "You are answering questions about a live GoPro camera stream. "
+            "You are answering questions about a live camera stream. "
             "Use only the visual evidence in the provided recent frames. "
             "If the answer is uncertain or not visible, say that clearly. "
             "Be concise but specific."
@@ -194,14 +191,13 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Ask a VLM questions about RTMP, RTSP, WebRTC, webcam, or video."
+        description="Ask a VLM questions about Tapo or smartphone camera streams."
     )
     add_source_args(parser)
     args = parser.parse_args()
 
-    source_type, target = resolve_source(
-        source_type=args.source_type,
-        protocol=args.protocol,
+    camera, source_type, target = resolve_source(
+        camera=args.camera,
         url=args.url,
     )
     provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
@@ -226,13 +222,13 @@ def main() -> None:
 
     capture_thread = threading.Thread(
         target=capture_stream_loop,
-        args=(source_type, target, frame_buffer, stop_event),
+        args=(camera, source_type, target, frame_buffer, stop_event),
         kwargs={"sample_interval_sec": 1.0},
         daemon=True,
     )
     capture_thread.start()
 
-    label = source_description(source_type, target)
+    label = source_description(camera, source_type, target)
     print(f"\nLive VLM QA started ({label}, provider={provider}).")
     print("Ask questions like:")
     print("- What objects are visible?")

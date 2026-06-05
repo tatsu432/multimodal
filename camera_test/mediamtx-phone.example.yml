@@ -1,0 +1,30 @@
+# Example MediaMTX config: Smartphone WebRTC in (publish/WHIP) → WebRTC/WHEP out
+# Usage: mediamtx /path/to/mediamtx-phone.example.yml
+#
+# Phone publish REQUIRES HTTPS (browsers block camera/mic on http:// LAN URLs).
+# 1. Generate TLS certs — see README section "Phone WebRTC TLS"
+# 2. Uncomment webrtcEncryption + paths below
+# 3. Open on phone (use Mac LAN IP, not localhost):
+#      https://192.168.1.100:8889/phone/publish
+#    WHIP (OBS, etc.): https://192.168.1.100:8889/phone/whip
+#
+# Mac preview: https://localhost:8889/phone/
+# Python WHEP: https://localhost:8889/phone/whep
+
+# Required for phone browser publish (camera/mic access from non-localhost clients).
+webrtcEncryption: yes
+webrtcServerKey: mediamtx-certs/server.key
+webrtcServerCert: mediamtx-certs/server.crt
+
+# Help non-browser clients (aiortc) complete ICE on localhost/LAN
+webrtcAdditionalHosts:
+  - 127.0.0.1
+  # - 192.168.11.51   # your Mac's LAN IP (required for phone publish URL)
+
+# aiortc often needs TCP ICE when UDP 8189 is blocked (common cause of ice=checking forever):
+webrtcLocalTCPAddress: :8190
+
+paths:
+  phone:
+    # Accept WebRTC publisher from phone browser or WHIP client.
+    # Stream exists only while the phone is actively publishing.

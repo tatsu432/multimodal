@@ -1,4 +1,5 @@
 .env
+mediamtx-certs/
 .venv
 __pycache__/
 *.py[cod]

@@ -11,6 +11,7 @@ from aiortc import RTCPeerConnection, RTCConfiguration
 
 from whep_client import (
     connection_state_summary,
+    create_whep_http_client,
     fetch_whep_ice_servers,
     negotiate_whep,
     parse_ice_servers,
@@ -23,7 +24,7 @@ async def probe(whep_url: str, ice_env: str | None, timeout_sec: float) -> int:
     print(f"WHEP URL: {whep_url}")
     print()
 
-    async with httpx.AsyncClient() as client:
+    async with create_whep_http_client() as client:
         print("=== OPTIONS (ICE servers) ===")
         try:
             opt = await client.options(whep_url, timeout=10.0)

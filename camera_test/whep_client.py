@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import ssl
+import subprocess
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urljoin
 
+import certifi
 import httpx
 import numpy as np
 from aiortc import (
@@ -18,6 +23,62 @@ from aiortc import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MKCERT_ROOT_CANDIDATES = (
+    Path.home() / "Library/Application Support/mkcert/rootCA.pem",  # macOS
+    Path.home() / ".local/share/mkcert/rootCA.pem",  # Linux
+)
+
+
+def _find_mkcert_root() -> Path | None:
+    try:
+        caroot = subprocess.run(
+            ["mkcert", "-CAROOT"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+        if caroot:
+            candidate = Path(caroot) / "rootCA.pem"
+            if candidate.is_file():
+                return candidate
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        pass
+
+    for candidate in _MKCERT_ROOT_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def resolve_whep_ssl_verify() -> bool | str | ssl.SSLContext:
+    """
+    httpx ``verify`` value for WHEP HTTP(S) calls.
+
+    Chrome trusts mkcert via the OS keychain; Python uses certifi and ignores
+    mkcert unless we add its root CA (or you set WEBRTC_CA_FILE).
+    """
+    verify_env = os.getenv("WEBRTC_SSL_VERIFY", "").strip().lower()
+    if verify_env in {"0", "false", "no"}:
+        return False
+
+    ca_file = os.getenv("WEBRTC_CA_FILE", "").strip()
+    if ca_file:
+        return ca_file
+
+    mkcert_root = _find_mkcert_root()
+    if mkcert_root is None:
+        return True
+
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    ctx.load_verify_locations(str(mkcert_root))
+    return ctx
+
+
+def create_whep_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(verify=resolve_whep_ssl_verify())
+
 
 _LINK_ICE_SERVER_RE = re.compile(
     r'^<([^>]+)>;\s*rel=["\']?ice-server["\']?'
@@ -160,11 +221,23 @@ async def wait_for_ice_connected(
     try:
         await asyncio.wait_for(done.wait(), timeout=timeout_sec)
     except asyncio.TimeoutError as exc:
+        hint = ""
+        if (
+            pc.iceConnectionState in {"connected", "completed"}
+            and pc.connectionState == "connecting"
+        ):
+            hint = (
+                "\n\nICE completed but DTLS never finished (connection stuck at 'connecting'). "
+                "This often happens with MediaMTX phone + webrtcEncryption + Python aiortc. "
+                "Use the RTSP relay instead: rtsp://127.0.0.1:8554/phone "
+                "(set PHONE_STREAM_URL in .env; phone-webrtc uses this by default)."
+            )
         raise RuntimeError(
             f"WebRTC peer connection timed out after {timeout_sec:.0f}s "
             f"({connection_state_summary(pc)}). "
             "If ice stays 'checking', ensure MediaMTX UDP 8189 is reachable or set "
             "webrtcLocalTCPAddress in mediamtx.yml (see mediamtx-tapo.example.yml)."
+            f"{hint}"
         ) from exc
 
     if failed:
@@ -262,7 +335,7 @@ async def run_whep_stream(
     video_track: Any | None = None
     track_ready = asyncio.Event()
 
-    async with httpx.AsyncClient() as client:
+    async with create_whep_http_client() as client:
         whep_ice = await fetch_whep_ice_servers(client, whep_url)
         resolved = resolve_ice_servers(whep_ice, ice_servers or [])
         logger.info(
