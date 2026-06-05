@@ -2,6 +2,7 @@ import argparse
 import time
 from pathlib import Path
 
+import cv2
 from dotenv import load_dotenv
 
 from stream_config import (
@@ -41,8 +42,6 @@ def main() -> None:
         raise RuntimeError(
             describe_open_failure(source_type, target, label, capture=cap)
         )
-
-    import cv2  # after WebRTC/aiortc init to reduce macOS FFmpeg load-order issues
 
     last_save_time = 0.0
     frame_id = 0

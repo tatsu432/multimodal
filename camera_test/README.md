@@ -12,6 +12,10 @@ All scripts support **RTMP** (e.g. GoPro relay), **RTSP** (e.g. Tapo IP camera),
 | `preview_stream.py` | Live preview only — no saving, no VLM |
 | `frame_sample.py` | Live preview + save a JPEG every 2 seconds to `sampled_frames/` |
 | `live_vlm_qa.py` | Background capture + ask a VLM questions about recent frames in a REPL |
+| `whep_client.py` | Core WHEP/ICE logic (aiortc) |
+| `whep_worker.py` | Subprocess worker — streams frames to parent (no OpenCV in child) |
+| `whep_probe.py` | Diagnose WHEP OPTIONS/POST/ICE (`camera-whep-probe`) |
+| `mediamtx-tapo.example.yml` | Example MediaMTX config for Tapo → WebRTC/WHEP |
 
 ## Setup
 
@@ -53,7 +57,8 @@ Set these in `camera_test/.env` (see [.env.example](.env.example)):
 | `RTSP_URL` | `rtsp://localhost:8554/live/gopro` | Used when source type is `rtsp` |
 | `WEBRTC_URL` | `http://localhost:8889/live/whep` | WHEP endpoint when source type is `webrtc` |
 | `WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | Optional comma-separated STUN/TURN URLs |
-| `WEBRTC_OPEN_TIMEOUT_SEC` | `15` | Seconds to wait for the first WebRTC frame |
+| `WEBRTC_OPEN_TIMEOUT_SEC` | `15` | Seconds to wait for WHEP connect + first frame |
+| `WEBRTC_IPC` | `subprocess` | `subprocess` (default) runs aiortc in a child process; `inprocess` for debugging |
 | `WEBCAM_INDEX` | `0` | Webcam device index |
 | `VIDEO_PATH` | — | Required when `FRAME_SOURCE_TYPE=video` |
 
@@ -110,10 +115,11 @@ WEBRTC_URL=http://localhost:8889/tapo/whep
 ```
 
 ```bash
+uv run camera-whep-probe --url http://localhost:8889/tapo/whep
 uv run camera-preview --source-type webrtc
 ```
 
-For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no` (see [Latency](#latency-rtsp-vs-webrtc) below). If the stream drops or stutters on Wi‑Fi, switch to `rtspTransport: tcp`.
+Example MediaMTX config: [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml). For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no` (see [Latency](#latency-rtsp-vs-webrtc) below). If the stream drops or stutters on Wi‑Fi, switch to `rtspTransport: tcp`.
 
 ### WebRTC (WHEP)
 
@@ -373,10 +379,10 @@ objc: Class AVFFrameReceiver is implemented in both .../av/.dylibs/libavdevice..
 
 **What we do in `camera_test`:**
 
-- Load **aiortc first**, then **OpenCV** on WebRTC preview (reduces rare load-order crashes).
-- Print a short explanation when opening a WebRTC source on macOS.
+- Run **aiortc in a child process** (`python -m whep_worker`); the parent only loads **OpenCV** (`WEBRTC_IPC=subprocess`, default).
+- The `AVFFrameReceiver` warning may still appear in the **child** stderr — that is OK. The parent should not print it.
 
-**If you see real crashes (not just the warning):** use RTSP direct for Python preview (`FRAME_SOURCE_TYPE=rtsp`) and keep WebRTC for the browser player only. There is no clean pip-level fix while both libraries bundle FFmpeg; upstream issue in the OpenCV + PyAV ecosystem.
+**If you see real crashes:** avoid `WEBRTC_IPC=inprocess` on macOS. Use default subprocess mode, or RTSP direct (`FRAME_SOURCE_TYPE=rtsp`) for Python preview.
 
 **Stream won't open**
 
@@ -409,14 +415,23 @@ If the browser URL plays video but WHEP still fails, MediaMTX may not be pulling
 
 **Browser WebRTC works, but `camera-preview --source-type webrtc` fails**
 
-The browser player fetches **ICE servers from MediaMTX** automatically (HTTP `OPTIONS` on the WHEP URL). A Python `aiortc` client must do the same — `camera_test` does this for you. Without those servers, WHEP negotiation may succeed but no video track arrives (ICE timeout).
+Diagnose step-by-step:
+
+```bash
+uv run camera-whep-probe --url http://localhost:8889/tapo/whep
+```
+
+Expect: OPTIONS returns `Link: ... ice-server`, POST returns `201`, ICE reaches `connected`.
 
 Checklist:
 
 1. `WEBRTC_URL` path matches `mediamtx.yml` (`tapo` → `http://localhost:8889/tapo/whep`).
 2. Browser test works: `http://localhost:8889/tapo/`.
-3. Increase timeout if needed: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
-4. Only set `WEBRTC_ICE_SERVERS` manually if auto-discovery fails.
+3. Copy [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml) — set `webrtcAdditionalHosts: [127.0.0.1]` (and LAN IP if needed).
+4. aiortc requires **all ICE candidates in the SDP offer** (no trickle). `whep_client.py` waits for `iceGatheringState=complete` before POST.
+5. Increase timeout: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
+6. Confirm MediaMTX >= 1.18.2 for improved non-trickle WHEP support.
+7. Inspect OPTIONS: `curl -i -X OPTIONS http://localhost:8889/tapo/whep`
 
 **WebRTC preview is laggy (~0.5–1 s)**
 

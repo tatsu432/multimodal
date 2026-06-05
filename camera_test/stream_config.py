@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 
 import cv2
 
@@ -168,9 +167,11 @@ def describe_open_failure(
                 "  WEBRTC_URL=http://localhost:8889/tapo/whep",
                 "",
                 "Verify in a browser first: http://localhost:8889/tapo/",
-                "If the browser plays but Python WHEP fails, ICE negotiation is the usual cause.",
-                "camera_test fetches ICE servers from MediaMTX via HTTP OPTIONS on the WHEP URL.",
-                "Override only if needed: WEBRTC_ICE_SERVERS=stun:stun.l.google.com:19302",
+                "If the browser plays but Python WHEP fails, run:",
+                "  uv run camera-whep-probe --url http://localhost:8889/tapo/whep",
+                "Common fixes: mediamtx webrtcAdditionalHosts, WEBRTC_OPEN_TIMEOUT_SEC=30.",
+                "WebRTC uses a subprocess worker by default (WEBRTC_IPC=subprocess) to avoid",
+                "loading aiortc and OpenCV in the same process on macOS.",
             ]
         )
         if target == DEFAULT_WEBRTC_URL:
@@ -211,37 +212,15 @@ def describe_open_failure(
     return "\n".join(lines)
 
 
-def macos_dual_ffmpeg_notice() -> None:
-    """
-    Explain the objc AVFFrameReceiver warning when OpenCV and aiortc load together.
-
-    Not related to WHEP/RTSP connection failures — harmless for URL-based streams.
-    """
-    if sys.platform != "darwin":
-        return
-
-    print(
-        "[camera_test] macOS note: OpenCV (cv2) and aiortc (PyAV) each bundle FFmpeg. "
-        "You may see:\n"
-        "  'Class AVFFrameReceiver is implemented in both ...'\n"
-        "That is expected when using WebRTC preview. It affects macOS AVFoundation "
-        "camera capture, not RTSP/RTMP/WHEP URLs. Safe to ignore unless the app "
-        "crashes. If crashes occur, use FRAME_SOURCE_TYPE=rtsp for Python preview."
-    )
-
-
 def open_source(source_type: str, target: str | int):
     """Open a capture handle for any supported source type."""
     if source_type == "webrtc":
-        from webrtc_capture import WebRTCCapture, parse_ice_servers
-
-        macos_dual_ffmpeg_notice()
+        from webrtc_capture import WebRTCCapture
 
         timeout = float(os.getenv("WEBRTC_OPEN_TIMEOUT_SEC", "15"))
-        ice_servers = parse_ice_servers(os.getenv("WEBRTC_ICE_SERVERS"))
         return WebRTCCapture(
             str(target),
-            ice_servers=ice_servers,
+            ice_servers_env=os.getenv("WEBRTC_ICE_SERVERS"),
             open_timeout_sec=timeout,
         )
 

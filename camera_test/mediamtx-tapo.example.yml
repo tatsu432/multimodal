@@ -1,0 +1,20 @@
+# Example MediaMTX config: Tapo RTSP in → WebRTC/WHEP + RTSP out
+# Usage: mediamtx /path/to/mediamtx-tapo.example.yml
+#
+# Browser preview:  http://localhost:8889/tapo/
+# Python WHEP:      http://localhost:8889/tapo/whep
+# Python RTSP relay: rtsp://localhost:8554/tapo  (optional; no aiortc)
+
+# Help non-browser clients (aiortc) complete ICE on localhost/LAN
+webrtcAdditionalHosts:
+  - 127.0.0.1
+  # - 192.168.1.100   # uncomment your Mac's LAN IP if ICE fails
+
+# If UDP 8189 is blocked, enable TCP ICE fallback:
+# webrtcLocalTCPAddress: :8190
+
+paths:
+  tapo:
+    source: rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+    sourceOnDemand: no
+    rtspTransport: udp

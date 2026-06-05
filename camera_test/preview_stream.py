@@ -1,5 +1,6 @@
 import argparse
 
+import cv2
 from dotenv import load_dotenv
 
 from stream_config import (
@@ -34,8 +35,6 @@ def main() -> None:
         raise RuntimeError(
             describe_open_failure(source_type, target, label, capture=cap)
         )
-
-    import cv2  # after WebRTC/aiortc init to reduce macOS FFmpeg load-order issues
 
     window_title = f"Camera preview — {source_type}"
 

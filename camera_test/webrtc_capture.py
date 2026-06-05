@@ -1,176 +1,44 @@
-"""WebRTC frame capture via WHEP (WebRTC-HTTP Egress Protocol)."""
+"""WebRTC frame capture via WHEP — subprocess IPC wrapper (default) or in-process."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
+import os
+import struct
+import subprocess
+import sys
 import threading
 import time
 from typing import Any
-from urllib.parse import urljoin
 
-import httpx
 import numpy as np
-from aiortc import (
-    RTCIceServer,
-    RTCPeerConnection,
-    RTCSessionDescription,
-    RTCConfiguration,
-)
 
 logger = logging.getLogger(__name__)
 
-_LINK_ICE_SERVER_RE = re.compile(
-    r'^<(.+?)>; rel="ice-server"'
-    r'(?:; username="(.*?)"; credential="(.*?)"; credential-type="password")?',
-)
+_FRAME_MAGIC = b"WFRM"
+_ERROR_MAGIC = b"WERR"
+_HEADER = struct.Struct(">4sIII")
 
 
-def parse_ice_servers(value: str | None) -> list[RTCIceServer]:
-    if not value or not value.strip():
-        return []
-
-    servers: list[RTCIceServer] = []
-    for part in value.split(","):
-        url = part.strip()
-        if url:
-            servers.append(RTCIceServer(urls=[url]))
-    return servers
+def _use_subprocess_ipc() -> bool:
+    mode = os.getenv("WEBRTC_IPC", "subprocess").strip().lower()
+    return mode != "inprocess"
 
 
-async def _fetch_whep_ice_servers(
-    client: httpx.AsyncClient,
-    whep_url: str,
-) -> list[RTCIceServer]:
-    """
-    MediaMTX advertises ICE/STUN servers on HTTP OPTIONS.
-
-    Browsers use these automatically; aiortc clients must fetch them explicitly.
-    See: https://github.com/bluenviron/mediamtx/discussions/3640
-    """
-    try:
-        response = await client.options(whep_url, timeout=10.0)
-    except httpx.HTTPError as exc:
-        logger.warning("WHEP OPTIONS failed (%s); falling back to env ICE servers", exc)
-        return []
-
-    servers: list[RTCIceServer] = []
-    for value in response.headers.get_list("link"):
-        match = _LINK_ICE_SERVER_RE.match(value)
-        if not match:
-            continue
-
-        kwargs: dict[str, Any] = {"urls": match.group(1)}
-        if match.group(2) is not None:
-            kwargs["username"] = match.group(2)
-            kwargs["credential"] = match.group(3)
-            kwargs["credentialType"] = "password"
-        servers.append(RTCIceServer(**kwargs))
-
-    return servers
-
-
-def _resolve_ice_servers(
-    whep_servers: list[RTCIceServer],
-    env_servers: list[RTCIceServer],
-) -> list[RTCIceServer]:
-    if env_servers:
-        return env_servers
-    if whep_servers:
-        return whep_servers
-    return [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
-
-
-async def _wait_for_ice_gathering(pc: RTCPeerConnection) -> None:
-    if pc.iceGatheringState == "complete":
-        return
-
-    done = asyncio.Event()
-
-    @pc.on("icegatheringstatechange")
-    def on_ice_gathering_state_change() -> None:
-        if pc.iceGatheringState == "complete":
-            done.set()
-
-    await done.wait()
-
-
-async def _negotiate_whep(
-    client: httpx.AsyncClient,
-    whep_url: str,
-    pc: RTCPeerConnection,
-) -> str | None:
-    offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-
-    if pc.localDescription is None:
-        raise RuntimeError("WebRTC local description was not created")
-
-    response = await client.post(
-        whep_url,
-        content=pc.localDescription.sdp,
-        headers={"Content-Type": "application/sdp"},
-        timeout=30.0,
-    )
-
-    if response.status_code == 201:
-        answer = RTCSessionDescription(sdp=response.text, type="answer")
-        await pc.setRemoteDescription(answer)
-        location = response.headers.get("Location")
-        return urljoin(whep_url, location) if location else None
-
-    if response.status_code == 406:
-        remote = RTCSessionDescription(sdp=response.text, type="offer")
-        await pc.setRemoteDescription(remote)
-
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        await _wait_for_ice_gathering(pc)
-
-        location = response.headers.get("Location")
-        if not location:
-            raise RuntimeError(
-                "WHEP counter-offer did not include a session Location header"
-            )
-
-        session_url = urljoin(whep_url, location)
-        patch = await client.patch(
-            session_url,
-            content=pc.localDescription.sdp if pc.localDescription else "",
-            headers={"Content-Type": "application/sdp"},
-            timeout=30.0,
-        )
-        if patch.status_code not in {200, 204}:
-            raise RuntimeError(
-                f"WHEP PATCH failed ({patch.status_code}): {patch.text}"
-            )
-        return session_url
-
-    body = response.text.strip()
-    hint = ""
-    if "no stream is available" in body.lower() or response.status_code in {404, 503}:
-        hint = (
-            "\n\nMediaMTX has no active stream on this path. "
-            "The path name in WEBRTC_URL must match the key under paths: in mediamtx.yml "
-            "(e.g. tapo → http://localhost:8889/tapo/whep). "
-            "Confirm the browser player works first (http://localhost:8889/<path>/)."
-        )
-    raise RuntimeError(
-        f"WHEP negotiation failed ({response.status_code}): {body}{hint}"
-    )
-
-
-class WebRTCCapture:
-    """VideoCapture-like reader for a WHEP WebRTC endpoint."""
+class _InProcessWebRTCCapture:
+    """aiortc in the same process (debug only; triggers macOS FFmpeg warning with cv2)."""
 
     def __init__(
         self,
         whep_url: str,
         *,
-        ice_servers: list[RTCIceServer] | None = None,
+        ice_servers: list | None = None,
         open_timeout_sec: float = 15.0,
     ) -> None:
+        from whep_client import run_whep_stream
+
+        self._run_whep_stream = run_whep_stream
         self._whep_url = whep_url
         self._ice_servers = ice_servers
         self._open_timeout_sec = open_timeout_sec
@@ -180,12 +48,14 @@ class WebRTCCapture:
         self._stop = threading.Event()
         self._error: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._pc: RTCPeerConnection | None = None
-        self._session_url: str | None = None
-        self._thread = threading.Thread(target=self._run, name="webrtc-capture", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="webrtc-capture-inprocess", daemon=True
+        )
         self._thread.start()
+        self._wait_until_open()
 
-        deadline = time.time() + open_timeout_sec
+    def _wait_until_open(self) -> None:
+        deadline = time.time() + self._open_timeout_sec
         while time.time() < deadline:
             if self._opened:
                 return
@@ -204,12 +74,6 @@ class WebRTCCapture:
 
     def release(self) -> None:
         self._stop.set()
-        if self._loop is not None and self._loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
-            try:
-                future.result(timeout=5.0)
-            except Exception:
-                logger.exception("Error while shutting down WebRTC capture")
         self._thread.join(timeout=5.0)
         self._opened = False
 
@@ -221,11 +85,28 @@ class WebRTCCapture:
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        stop_async = asyncio.Event()
+
+        def watch() -> None:
+            while not self._stop.is_set():
+                time.sleep(0.05)
+            self._loop.call_soon_threadsafe(stop_async.set)
+
+        threading.Thread(target=watch, daemon=True).start()
+
         try:
-            self._loop.run_until_complete(self._main())
+            self._loop.run_until_complete(
+                self._run_whep_stream(
+                    self._whep_url,
+                    ice_servers=self._ice_servers,
+                    open_timeout_sec=self._open_timeout_sec,
+                    stop_event=stop_async,
+                    on_frame=self._set_frame,
+                )
+            )
         except Exception as exc:
             self._error = str(exc)
-            logger.exception("WebRTC capture thread failed")
+            logger.exception("In-process WebRTC capture failed")
         finally:
             self._loop.close()
 
@@ -233,68 +114,157 @@ class WebRTCCapture:
     def last_error(self) -> str | None:
         return self._error
 
-    async def _main(self) -> None:
-        video_track: Any | None = None
-        track_ready = asyncio.Event()
 
-        async with httpx.AsyncClient() as client:
-            whep_ice = await _fetch_whep_ice_servers(client, self._whep_url)
-            ice_servers = _resolve_ice_servers(whep_ice, self._ice_servers or [])
-            logger.info(
-                "WHEP ICE servers: %s",
-                [getattr(s, "urls", s) for s in ice_servers],
+class _SubprocessWebRTCCapture:
+    """WHEP via `python -m whep_worker` — parent never imports aiortc."""
+
+    def __init__(
+        self,
+        whep_url: str,
+        *,
+        ice_servers_env: str | None = None,
+        open_timeout_sec: float = 15.0,
+    ) -> None:
+        self._whep_url = whep_url
+        self._open_timeout_sec = open_timeout_sec
+        self._lock = threading.Lock()
+        self._latest_frame: np.ndarray | None = None
+        self._opened = False
+        self._error: str | None = None
+        self._stop = threading.Event()
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "whep_worker",
+            "--url",
+            whep_url,
+            "--timeout",
+            str(open_timeout_sec),
+            "--ice-servers",
+            ice_servers_env or "",
+        ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self._reader = threading.Thread(
+            target=self._read_loop, name="whep-stdout-reader", daemon=True
+        )
+        self._reader.start()
+        self._wait_until_open()
+
+    def _wait_until_open(self) -> None:
+        deadline = time.time() + self._open_timeout_sec
+        while time.time() < deadline:
+            if self._opened:
+                return
+            if self._error is not None:
+                return
+            if self._proc.poll() is not None:
+                break
+            time.sleep(0.05)
+
+        if not self._opened and self._error is None:
+            stderr = ""
+            if self._proc.stderr is not None:
+                stderr = self._proc.stderr.read().decode("utf-8", errors="replace")
+            self._error = (
+                f"WHEP worker did not deliver a frame within {self._open_timeout_sec:.0f}s"
+                + (f"\n{stderr}" if stderr else "")
             )
 
-            configuration = RTCConfiguration(iceServers=ice_servers)
-            self._pc = RTCPeerConnection(configuration=configuration)
-            pc = self._pc
+    def _read_loop(self) -> None:
+        stdout = self._proc.stdout
+        if stdout is None:
+            self._error = "WHEP worker stdout not available"
+            return
 
-            @pc.on("track")
-            def on_track(track: Any) -> None:
-                nonlocal video_track
-                if track.kind == "video" and video_track is None:
-                    video_track = track
-                    track_ready.set()
+        while not self._stop.is_set():
+            header_bytes = stdout.read(_HEADER.size)
+            if not header_bytes or len(header_bytes) < _HEADER.size:
+                if self._proc.poll() is not None and not self._opened:
+                    if self._error is None:
+                        self._error = "WHEP worker exited before delivering frames"
+                break
 
-            pc.addTransceiver("video", direction="recvonly")
-            pc.addTransceiver("audio", direction="recvonly")
+            magic, height, width, length = _HEADER.unpack(header_bytes)
+            payload = stdout.read(length)
+            if len(payload) < length:
+                break
 
-            self._session_url = await _negotiate_whep(client, self._whep_url, pc)
+            if magic == _ERROR_MAGIC:
+                self._error = payload.decode("utf-8", errors="replace")
+                break
 
+            if magic == _FRAME_MAGIC and height > 0 and width > 0:
+                frame = np.frombuffer(payload, dtype=np.uint8).reshape(height, width, 3)
+                with self._lock:
+                    self._latest_frame = frame.copy()
+                    self._opened = True
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        with self._lock:
+            if self._latest_frame is None:
+                return False, None
+            return True, self._latest_frame.copy()
+
+    def release(self) -> None:
+        self._stop.set()
+        if self._proc.poll() is None:
+            self._proc.terminate()
             try:
-                await asyncio.wait_for(track_ready.wait(), timeout=self._open_timeout_sec)
-            except asyncio.TimeoutError as exc:
-                raise RuntimeError(
-                    "No WebRTC video track received within "
-                    f"{self._open_timeout_sec:.0f}s "
-                    f"(connection={pc.connectionState}, ice={pc.iceConnectionState}). "
-                    "If http://localhost:8889/<path>/ works in a browser but Python fails, "
-                    "MediaMTX ICE servers from WHEP OPTIONS were likely not used — "
-                    "this client fetches them automatically; retry after updating camera_test."
-                ) from exc
+                self._proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        self._opened = False
 
-            assert video_track is not None
+    @property
+    def last_error(self) -> str | None:
+        return self._error
 
-            while not self._stop.is_set():
-                try:
-                    frame = await asyncio.wait_for(video_track.recv(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                except Exception:
-                    if not self._stop.is_set():
-                        logger.exception("WebRTC frame read failed")
-                    break
 
-                self._set_frame(frame.to_ndarray(format="bgr24"))
+class WebRTCCapture:
+    """VideoCapture-like reader for a WHEP WebRTC endpoint."""
 
-    async def _shutdown(self) -> None:
-        if self._session_url:
-            try:
-                async with httpx.AsyncClient() as client:
-                    await client.delete(self._session_url, timeout=10.0)
-            except Exception:
-                logger.exception("Failed to delete WHEP session")
+    def __init__(
+        self,
+        whep_url: str,
+        *,
+        ice_servers_env: str | None = None,
+        open_timeout_sec: float = 15.0,
+    ) -> None:
+        if _use_subprocess_ipc():
+            self._impl = _SubprocessWebRTCCapture(
+                whep_url,
+                ice_servers_env=ice_servers_env,
+                open_timeout_sec=open_timeout_sec,
+            )
+        else:
+            from whep_client import parse_ice_servers
 
-        if self._pc is not None:
-            await self._pc.close()
-            self._pc = None
+            self._impl = _InProcessWebRTCCapture(
+                whep_url,
+                ice_servers=parse_ice_servers(ice_servers_env),
+                open_timeout_sec=open_timeout_sec,
+            )
+
+    def isOpened(self) -> bool:
+        return self._impl.isOpened()
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        return self._impl.read()
+
+    def release(self) -> None:
+        self._impl.release()
+
+    @property
+    def last_error(self) -> str | None:
+        return self._impl.last_error
+
+

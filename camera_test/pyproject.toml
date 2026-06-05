@@ -5,6 +5,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 only-include = [
     "stream_config.py",
+    "whep_client.py",
+    "whep_worker.py",
+    "whep_probe.py",
     "webrtc_capture.py",
     "preview_stream.py",
     "frame_sample.py",
@@ -31,6 +34,7 @@ dependencies = [
 camera-preview = "preview_stream:main"
 camera-sample = "frame_sample:main"
 camera-vlm = "live_vlm_qa:main"
+camera-whep-probe = "whep_probe:main"
 
 [tool.uv.sources]
 multimodal = { path = "..", editable = true }
