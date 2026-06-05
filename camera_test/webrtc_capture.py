@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -20,17 +21,65 @@ from aiortc import (
 
 logger = logging.getLogger(__name__)
 
+_LINK_ICE_SERVER_RE = re.compile(
+    r'^<(.+?)>; rel="ice-server"'
+    r'(?:; username="(.*?)"; credential="(.*?)"; credential-type="password")?',
+)
+
 
 def parse_ice_servers(value: str | None) -> list[RTCIceServer]:
     if not value or not value.strip():
-        return [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+        return []
 
     servers: list[RTCIceServer] = []
     for part in value.split(","):
         url = part.strip()
         if url:
             servers.append(RTCIceServer(urls=[url]))
-    return servers or [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+    return servers
+
+
+async def _fetch_whep_ice_servers(
+    client: httpx.AsyncClient,
+    whep_url: str,
+) -> list[RTCIceServer]:
+    """
+    MediaMTX advertises ICE/STUN servers on HTTP OPTIONS.
+
+    Browsers use these automatically; aiortc clients must fetch them explicitly.
+    See: https://github.com/bluenviron/mediamtx/discussions/3640
+    """
+    try:
+        response = await client.options(whep_url, timeout=10.0)
+    except httpx.HTTPError as exc:
+        logger.warning("WHEP OPTIONS failed (%s); falling back to env ICE servers", exc)
+        return []
+
+    servers: list[RTCIceServer] = []
+    for value in response.headers.get_list("link"):
+        match = _LINK_ICE_SERVER_RE.match(value)
+        if not match:
+            continue
+
+        kwargs: dict[str, Any] = {"urls": match.group(1)}
+        if match.group(2) is not None:
+            kwargs["username"] = match.group(2)
+            kwargs["credential"] = match.group(3)
+            kwargs["credentialType"] = "password"
+        servers.append(RTCIceServer(**kwargs))
+
+    return servers
+
+
+def _resolve_ice_servers(
+    whep_servers: list[RTCIceServer],
+    env_servers: list[RTCIceServer],
+) -> list[RTCIceServer]:
+    if env_servers:
+        return env_servers
+    if whep_servers:
+        return whep_servers
+    return [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
 
 
 async def _wait_for_ice_gathering(pc: RTCPeerConnection) -> None:
@@ -54,7 +103,6 @@ async def _negotiate_whep(
 ) -> str | None:
     offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
-    await _wait_for_ice_gathering(pc)
 
     if pc.localDescription is None:
         raise RuntimeError("WebRTC local description was not created")
@@ -73,7 +121,6 @@ async def _negotiate_whep(
         return urljoin(whep_url, location) if location else None
 
     if response.status_code == 406:
-        # WHEP counter-offer: answer the server's SDP offer via PATCH.
         remote = RTCSessionDescription(sdp=response.text, type="offer")
         await pc.setRemoteDescription(remote)
 
@@ -106,7 +153,7 @@ async def _negotiate_whep(
         hint = (
             "\n\nMediaMTX has no active stream on this path. "
             "The path name in WEBRTC_URL must match the key under paths: in mediamtx.yml "
-            "(e.g. tapo → http://localhost:8889/tapo/whep, not .../live/whep). "
+            "(e.g. tapo → http://localhost:8889/tapo/whep). "
             "Confirm the browser player works first (http://localhost:8889/<path>/)."
         )
     raise RuntimeError(
@@ -125,7 +172,7 @@ class WebRTCCapture:
         open_timeout_sec: float = 15.0,
     ) -> None:
         self._whep_url = whep_url
-        self._ice_servers = ice_servers or [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+        self._ice_servers = ice_servers
         self._open_timeout_sec = open_timeout_sec
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
@@ -187,29 +234,43 @@ class WebRTCCapture:
         return self._error
 
     async def _main(self) -> None:
-        configuration = RTCConfiguration(iceServers=self._ice_servers)
-        self._pc = RTCPeerConnection(configuration=configuration)
-        pc = self._pc
         video_track: Any | None = None
         track_ready = asyncio.Event()
 
-        @pc.on("track")
-        def on_track(track: Any) -> None:
-            nonlocal video_track
-            if track.kind == "video" and video_track is None:
-                video_track = track
-                track_ready.set()
-
-        pc.addTransceiver("video", direction="recvonly")
-
         async with httpx.AsyncClient() as client:
+            whep_ice = await _fetch_whep_ice_servers(client, self._whep_url)
+            ice_servers = _resolve_ice_servers(whep_ice, self._ice_servers or [])
+            logger.info(
+                "WHEP ICE servers: %s",
+                [getattr(s, "urls", s) for s in ice_servers],
+            )
+
+            configuration = RTCConfiguration(iceServers=ice_servers)
+            self._pc = RTCPeerConnection(configuration=configuration)
+            pc = self._pc
+
+            @pc.on("track")
+            def on_track(track: Any) -> None:
+                nonlocal video_track
+                if track.kind == "video" and video_track is None:
+                    video_track = track
+                    track_ready.set()
+
+            pc.addTransceiver("video", direction="recvonly")
+            pc.addTransceiver("audio", direction="recvonly")
+
             self._session_url = await _negotiate_whep(client, self._whep_url, pc)
 
             try:
                 await asyncio.wait_for(track_ready.wait(), timeout=self._open_timeout_sec)
             except asyncio.TimeoutError as exc:
                 raise RuntimeError(
-                    f"No WebRTC video track received within {self._open_timeout_sec:.0f}s"
+                    "No WebRTC video track received within "
+                    f"{self._open_timeout_sec:.0f}s "
+                    f"(connection={pc.connectionState}, ice={pc.iceConnectionState}). "
+                    "If http://localhost:8889/<path>/ works in a browser but Python fails, "
+                    "MediaMTX ICE servers from WHEP OPTIONS were likely not used — "
+                    "this client fetches them automatically; retry after updating camera_test."
                 ) from exc
 
             assert video_track is not None

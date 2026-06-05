@@ -357,6 +357,27 @@ Keep the MediaMTX + WebRTC path when you need `http://localhost:8889/tapo/` in a
 
 ## Troubleshooting
 
+**`Class AVFFrameReceiver is implemented in both ...` (macOS)**
+
+On macOS, **OpenCV** (`opencv-python`) and **aiortc** (via **PyAV** / `av`) each ship their own FFmpeg libraries. When both load in one process (WebRTC preview in `camera_test`), the Objective-C runtime may print:
+
+```text
+objc: Class AVFFrameReceiver is implemented in both .../av/.dylibs/libavdevice... and .../cv2/.dylibs/libavdevice...
+```
+
+**What it means:** two copies of FFmpeg’s macOS **AVFoundation** wrapper registered the same internal class names. It is a packaging overlap, not a sign your Tapo URL or WHEP config is wrong.
+
+**Is it related to WebRTC errors?** Usually **no**. Connection failures (`no stream on path`, ICE timeout, WHEP 404) come from MediaMTX paths, ICE servers, or network — not this warning.
+
+**When it matters:** mainly if you capture from a **Mac built-in webcam via AVFoundation** through both stacks at once. For **RTSP / RTMP / WHEP URL** streaming (Tapo, MediaMTX), it is **harmless** and can be ignored.
+
+**What we do in `camera_test`:**
+
+- Load **aiortc first**, then **OpenCV** on WebRTC preview (reduces rare load-order crashes).
+- Print a short explanation when opening a WebRTC source on macOS.
+
+**If you see real crashes (not just the warning):** use RTSP direct for Python preview (`FRAME_SOURCE_TYPE=rtsp`) and keep WebRTC for the browser player only. There is no clean pip-level fix while both libraries bundle FFmpeg; upstream issue in the OpenCV + PyAV ecosystem.
+
 **Stream won't open**
 
 1. Test the same URL in VLC (*Media → Open Network Stream*).
@@ -385,6 +406,17 @@ WEBRTC_URL=http://localhost:8889/tapo/whep
 ```
 
 If the browser URL plays video but WHEP still fails, MediaMTX may not be pulling RTSP yet — set `sourceOnDemand: no` or open the browser player once to start the pull.
+
+**Browser WebRTC works, but `camera-preview --source-type webrtc` fails**
+
+The browser player fetches **ICE servers from MediaMTX** automatically (HTTP `OPTIONS` on the WHEP URL). A Python `aiortc` client must do the same — `camera_test` does this for you. Without those servers, WHEP negotiation may succeed but no video track arrives (ICE timeout).
+
+Checklist:
+
+1. `WEBRTC_URL` path matches `mediamtx.yml` (`tapo` → `http://localhost:8889/tapo/whep`).
+2. Browser test works: `http://localhost:8889/tapo/`.
+3. Increase timeout if needed: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
+4. Only set `WEBRTC_ICE_SERVERS` manually if auto-discovery fails.
 
 **WebRTC preview is laggy (~0.5–1 s)**
 
