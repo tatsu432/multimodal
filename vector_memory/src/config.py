@@ -30,7 +30,9 @@ class Config:
     default_should_store_only: bool
     timezone: ZoneInfo
     use_llm_answerer: bool
+    llm_provider: str
     llm_model: str
+    ollama_base_url: str
     rebuild_index: bool
 
     @classmethod
@@ -88,7 +90,11 @@ class Config:
             use_llm_answerer=parse_bool_env(
                 os.getenv("USE_LLM_ANSWERER", "false")
             ),
+            llm_provider=os.getenv("LLM_PROVIDER", "openai").strip().lower(),
             llm_model=os.getenv("LLM_MODEL", "").strip(),
+            ollama_base_url=os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            ).strip(),
             rebuild_index=parse_bool_env(os.getenv("REBUILD_INDEX", "false")),
         )
 
@@ -108,9 +114,14 @@ class Config:
             )
 
         if self.use_llm_answerer:
-            if not self.openai_api_key:
+            if self.llm_provider not in {"openai", "ollama"}:
                 raise ValueError(
-                    "OPENAI_API_KEY is required when USE_LLM_ANSWERER=true"
+                    "LLM_PROVIDER must be 'openai' or 'ollama' when USE_LLM_ANSWERER=true"
+                )
+            if self.llm_provider == "openai" and not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required when USE_LLM_ANSWERER=true "
+                    "and LLM_PROVIDER=openai"
                 )
             if not self.llm_model:
                 raise ValueError(

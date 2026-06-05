@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from openai import OpenAI
+from providers.ollama import chat as ollama_chat
 
 from src.config import Config
 from src.utils import FrameItem, encode_frame_as_base64_jpeg
@@ -105,6 +106,66 @@ class OpenAIVLMClient(VLMClient):
         return response.output_text
 
 
+class OllamaVLMClient(VLMClient):
+    def __init__(
+        self,
+        model: str,
+        frame_source_type: str,
+        base_url: str,
+    ):
+        self.model = model
+        self.base_url = base_url
+        self.feed_description = SOURCE_PROMPTS.get(
+            frame_source_type, "a live camera feed"
+        )
+
+    def answer_question(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> str:
+        if not frames:
+            return "No frames are available yet. Wait a few seconds and ask again."
+
+        prompt_parts = [
+            (
+                f"You are answering questions about {self.feed_description}. "
+                "Use only the visual evidence in the provided recent frames. "
+                "If the answer is uncertain or not visible, say that clearly. "
+                "Be concise but specific."
+            ),
+            f"User question: {question}",
+        ]
+        images: list[str] = []
+
+        for i, frame in enumerate(frames):
+            if frame_items and i < len(frame_items):
+                age_sec = time.time() - frame_items[i].timestamp
+                prompt_parts.append(
+                    f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago."
+                )
+            else:
+                prompt_parts.append(f"Frame {i + 1}.")
+
+            images.append(encode_frame_as_base64_jpeg(frame))
+
+        logger.info(
+            "Calling Ollama model=%s with %d frame(s)", self.model, len(frames)
+        )
+        return ollama_chat(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "\n\n".join(prompt_parts),
+                    "images": images,
+                }
+            ],
+            base_url=self.base_url,
+        )
+
+
 def create_vlm_client(config: Config) -> VLMClient:
     if config.vlm_provider == "openai":
         return OpenAIVLMClient(
@@ -113,6 +174,11 @@ def create_vlm_client(config: Config) -> VLMClient:
             frame_source_type=config.frame_source_type,
         )
 
-    raise NotImplementedError(
-        f"VLM provider {config.vlm_provider!r} is not implemented in Phase 1"
-    )
+    if config.vlm_provider == "ollama":
+        return OllamaVLMClient(
+            model=config.vlm_model,
+            frame_source_type=config.frame_source_type,
+            base_url=config.ollama_base_url,
+        )
+
+    raise ValueError(f"Unsupported VLM provider: {config.vlm_provider!r}")

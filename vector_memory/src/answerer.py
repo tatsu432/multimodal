@@ -3,6 +3,7 @@ import logging
 import re
 
 from openai import OpenAI
+from providers.ollama import chat as ollama_chat
 
 from src.config import PROJECT_ROOT, Config
 from src.schema import ParsedMemoryQuery, ScoredMemory
@@ -134,15 +135,26 @@ def _llm_summarize(
     )
 
     try:
-        client = OpenAI(api_key=config.openai_api_key)
-        response = client.responses.create(
-            model=config.llm_model,
-            input=[
-                {"role": "system", "content": LLM_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        text = response.output_text.strip()
+        if config.llm_provider == "ollama":
+            text = ollama_chat(
+                model=config.llm_model,
+                messages=[
+                    {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                base_url=config.ollama_base_url,
+            )
+        else:
+            client = OpenAI(api_key=config.openai_api_key)
+            response = client.responses.create(
+                model=config.llm_model,
+                input=[
+                    {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+            )
+            text = response.output_text.strip()
+
         if text:
             return text
     except Exception as exc:

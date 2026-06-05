@@ -8,7 +8,7 @@ from src.utils import parse_bool_env
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VALID_FRAME_SOURCE_TYPES = frozenset({"rtmp", "webcam", "video"})
-VALID_VLM_PROVIDERS = frozenset({"openai"})
+VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 
 
 @dataclass
@@ -20,6 +20,7 @@ class Config:
     vlm_provider: str
     vlm_model: str
     openai_api_key: str
+    ollama_base_url: str
     frame_sample_dir: Path
     num_frames_per_query: int
     save_queried_frames: bool
@@ -45,6 +46,9 @@ class Config:
             vlm_provider=os.getenv("VLM_PROVIDER", "openai").strip().lower(),
             vlm_model=os.getenv("VLM_MODEL", "gpt-5.5"),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+            ollama_base_url=os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            ).strip(),
             frame_sample_dir=frame_sample_dir,
             num_frames_per_query=int(os.getenv("NUM_FRAMES_PER_QUERY", "1")),
             save_queried_frames=parse_bool_env(
@@ -79,10 +83,15 @@ class Config:
                 f"got {self.vlm_provider!r}"
             )
 
-        if not self.openai_api_key:
+        if self.vlm_provider == "openai" and not self.openai_api_key:
             raise ValueError(
-                "OPENAI_API_KEY is required. Copy .env.example to .env and set your key."
+                "OPENAI_API_KEY is required when VLM_PROVIDER=openai. "
+                "Copy .env.example to .env and set your key, "
+                "or set VLM_PROVIDER=ollama for a local model."
             )
+
+        if not self.vlm_model:
+            raise ValueError("VLM_MODEL is required.")
 
         if self.num_frames_per_query < 1:
             raise ValueError("NUM_FRAMES_PER_QUERY must be at least 1")

@@ -3,6 +3,7 @@ import sys
 import time
 
 from openai import OpenAIError
+from providers.ollama import OllamaError
 
 from src.config import Config
 from src.frame_source import FrameSource, create_frame_source
@@ -95,10 +96,10 @@ def _handle_question(
             frames=frames,
             frame_items=frame_items,
         )
-    except OpenAIError as exc:
+    except (OpenAIError, OllamaError) as exc:
         latency_ms = (time.perf_counter() - start) * 1000
-        logger.exception("VLM API error after %.0f ms", latency_ms)
-        print(f"\nAssistant: VLM API error — {exc}\n")
+        logger.exception("VLM error after %.0f ms", latency_ms)
+        print(f"\nAssistant: VLM error — {exc}\n")
         return
     except Exception as exc:
         latency_ms = (time.perf_counter() - start) * 1000

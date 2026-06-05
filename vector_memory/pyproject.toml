@@ -6,8 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chromadb>=1.0.0",
+    "multimodal",
     "openai>=2.41.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "sentence-transformers>=3.4.0",
 ]
+
+[tool.uv.sources]
+multimodal = { path = "..", editable = true }

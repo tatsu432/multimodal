@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 from openai import OpenAIError
+from providers.ollama import OllamaError
 
 from src.config import Config
 from src.frame_source import FrameSource, create_frame_source
@@ -88,10 +89,10 @@ def _handle_question(
             frames=frames,
             frame_items=frame_items,
         )
-    except OpenAIError as exc:
+    except (OpenAIError, OllamaError) as exc:
         stats.vlm_failures += 1
-        logger.error("VLM Q&A API error: %s", exc)
-        print(f"\nAssistant: VLM API error — {exc}\n")
+        logger.error("VLM Q&A error: %s", exc)
+        print(f"\nAssistant: VLM error — {exc}\n")
         return
     except Exception as exc:
         stats.vlm_failures += 1
@@ -103,10 +104,10 @@ def _handle_question(
 
     try:
         analysis = vlm.analyze_frame_for_memory(frames[-1])
-    except OpenAIError as exc:
+    except (OpenAIError, OllamaError) as exc:
         stats.vlm_failures += 1
-        logger.error("VLM memory API error: %s", exc)
-        print(f"Memory: VLM API error — {exc}\n")
+        logger.error("VLM memory error: %s", exc)
+        print(f"Memory: VLM error — {exc}\n")
         return
     except Exception as exc:
         stats.vlm_failures += 1

@@ -21,8 +21,10 @@ class Config:
     default_should_store_only: bool
     timezone: ZoneInfo
     use_llm_answerer: bool
+    llm_provider: str
     openai_api_key: str
     llm_model: str
+    ollama_base_url: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -57,8 +59,12 @@ class Config:
             use_llm_answerer=parse_bool_env(
                 os.getenv("USE_LLM_ANSWERER", "false")
             ),
+            llm_provider=os.getenv("LLM_PROVIDER", "openai").strip().lower(),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             llm_model=os.getenv("LLM_MODEL", "").strip(),
+            ollama_base_url=os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            ).strip(),
         )
 
     def validate(self) -> None:
@@ -72,9 +78,14 @@ class Config:
             )
 
         if self.use_llm_answerer:
-            if not self.openai_api_key:
+            if self.llm_provider not in {"openai", "ollama"}:
                 raise ValueError(
-                    "OPENAI_API_KEY is required when USE_LLM_ANSWERER=true"
+                    "LLM_PROVIDER must be 'openai' or 'ollama' when USE_LLM_ANSWERER=true"
+                )
+            if self.llm_provider == "openai" and not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required when USE_LLM_ANSWERER=true "
+                    "and LLM_PROVIDER=openai"
                 )
             if not self.llm_model:
                 raise ValueError(

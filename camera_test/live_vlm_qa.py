@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
+from providers.ollama import chat as ollama_chat
 
 from stream_config import add_stream_args, open_stream, resolve_stream
 
@@ -103,62 +104,85 @@ def capture_stream_loop(
         cap.release()
 
 
+def _build_question_prompt(question: str, frames: List[FrameItem]) -> tuple[str, list[str]]:
+    prompt_parts = [
+        (
+            "You are answering questions about a live GoPro camera stream. "
+            "Use only the visual evidence in the provided recent frames. "
+            "If the answer is uncertain or not visible, say that clearly. "
+            "Be concise but specific."
+        ),
+        f"User question: {question}",
+    ]
+    images: list[str] = []
+
+    for i, item in enumerate(frames):
+        age_sec = time.time() - item.timestamp
+        prompt_parts.append(
+            f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago."
+        )
+        images.append(encode_frame_as_base64_jpeg(item.frame))
+
+    return "\n\n".join(prompt_parts), images
+
+
 def ask_vlm_about_recent_frames(
-    client: OpenAI,
+    *,
+    provider: str,
     model: str,
     question: str,
     frames: List[FrameItem],
     max_frames_to_send: int = 4,
+    openai_client: OpenAI | None = None,
+    ollama_base_url: str = "http://localhost:11434",
 ) -> str:
     """
-    Sends recent frames + user's text question to the VLM.
+    Sends recent frames + user's text question to the configured VLM provider.
     """
     if not frames:
         return "No frames are available yet. Wait a few seconds and ask again."
 
     selected_frames = frames[-max_frames_to_send:]
+    prompt, images = _build_question_prompt(question, selected_frames)
 
-    content = [
-        {
-            "type": "input_text",
-            "text": (
-                "You are answering questions about a live GoPro camera stream. "
-                "Use only the visual evidence in the provided recent frames. "
-                "If the answer is uncertain or not visible, say that clearly. "
-                "Be concise but specific.\n\n"
-                f"User question: {question}"
-            ),
-        }
-    ]
+    if provider == "openai":
+        if openai_client is None:
+            raise ValueError("OpenAI client is required when VLM_PROVIDER=openai")
 
-    for i, item in enumerate(selected_frames):
-        age_sec = time.time() - item.timestamp
-        b64 = encode_frame_as_base64_jpeg(item.frame)
+        content: list[dict] = [{"type": "input_text", "text": prompt}]
+        for b64 in images:
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{b64}",
+                }
+            )
 
-        content.append(
-            {
-                "type": "input_text",
-                "text": f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago.",
-            }
+        response = openai_client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
         )
-        content.append(
-            {
-                "type": "input_image",
-                "image_url": f"data:image/jpeg;base64,{b64}",
-            }
+        return response.output_text
+
+    if provider == "ollama":
+        return ollama_chat(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": images,
+                }
+            ],
+            base_url=ollama_base_url,
         )
 
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "user",
-                "content": content,
-            }
-        ],
-    )
-
-    return response.output_text
+    raise ValueError(f"Unsupported VLM provider: {provider!r}")
 
 
 def main() -> None:
@@ -171,9 +195,22 @@ def main() -> None:
     args = parser.parse_args()
 
     protocol, stream_url = resolve_stream(protocol=args.protocol, url=args.url)
+    provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
     model = os.getenv("VLM_MODEL", "gpt-5.5")
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
 
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    if provider not in {"openai", "ollama"}:
+        raise ValueError("VLM_PROVIDER must be 'openai' or 'ollama'")
+
+    openai_client: OpenAI | None = None
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY is required when VLM_PROVIDER=openai. "
+                "Set VLM_PROVIDER=ollama to use a local model instead."
+            )
+        openai_client = OpenAI(api_key=api_key)
 
     frame_buffer = LiveFrameBuffer(max_frames=8)
     stop_event = threading.Event()
@@ -186,7 +223,7 @@ def main() -> None:
     )
     capture_thread.start()
 
-    print(f"\nLive VLM QA started ({protocol.upper()}).")
+    print(f"\nLive VLM QA started ({protocol.upper()}, provider={provider}).")
     print("Ask questions like:")
     print("- What objects are visible?")
     print("- Is there a person in front of the camera?")
@@ -205,11 +242,13 @@ def main() -> None:
 
             print("VLM: thinking...")
             answer = ask_vlm_about_recent_frames(
-                client=client,
+                provider=provider,
                 model=model,
                 question=question,
                 frames=frames,
                 max_frames_to_send=4,
+                openai_client=openai_client,
+                ollama_base_url=ollama_base_url,
             )
 
             print(f"\nVLM: {answer}\n")
