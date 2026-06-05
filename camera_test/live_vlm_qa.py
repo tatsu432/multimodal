@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from providers.ollama import chat as ollama_chat
 
-from stream_config import add_stream_args, open_stream, resolve_stream
+from stream_config import add_source_args, open_stream, resolve_source, source_description
 
 
 @dataclass
@@ -66,32 +66,37 @@ def encode_frame_as_base64_jpeg(
 
 
 def capture_stream_loop(
-    protocol: str,
-    stream_url: str,
+    source_type: str,
+    target: str | int,
     buffer: LiveFrameBuffer,
     stop_event: threading.Event,
     sample_interval_sec: float = 1.0,
 ) -> None:
     """
-    Continuously reads the live stream and stores sampled recent frames.
+    Continuously reads frames from the configured source and stores recent samples.
     """
-    print(f"[capture] Opening {protocol.upper()} stream: {stream_url}")
+    label = source_description(source_type, target)
+    print(f"[capture] Opening {label}")
 
     while not stop_event.is_set():
-        cap = open_stream(stream_url)
+        cap = open_stream(target)
 
         if not cap.isOpened():
-            print("[capture] Could not open stream. Retrying in 2 seconds...")
+            print("[capture] Could not open source. Retrying in 2 seconds...")
             time.sleep(2)
             continue
 
-        print("[capture] Stream opened.")
+        print("[capture] Source opened.")
         last_sample_time = 0.0
 
         while not stop_event.is_set():
             ok, frame = cap.read()
 
             if not ok:
+                if source_type == "video":
+                    print("[capture] End of video reached. Looping...")
+                    break
+
                 print("[capture] Failed to read frame. Reconnecting...")
                 break
 
@@ -189,12 +194,16 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Ask a VLM questions about a live RTMP or RTSP stream."
+        description="Ask a VLM questions about RTMP, RTSP, webcam, or video frames."
     )
-    add_stream_args(parser)
+    add_source_args(parser)
     args = parser.parse_args()
 
-    protocol, stream_url = resolve_stream(protocol=args.protocol, url=args.url)
+    source_type, target = resolve_source(
+        source_type=args.source_type,
+        protocol=args.protocol,
+        url=args.url,
+    )
     provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
     model = os.getenv("VLM_MODEL", "gpt-5.5")
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
@@ -217,13 +226,14 @@ def main() -> None:
 
     capture_thread = threading.Thread(
         target=capture_stream_loop,
-        args=(protocol, stream_url, frame_buffer, stop_event),
+        args=(source_type, target, frame_buffer, stop_event),
         kwargs={"sample_interval_sec": 1.0},
         daemon=True,
     )
     capture_thread.start()
 
-    print(f"\nLive VLM QA started ({protocol.upper()}, provider={provider}).")
+    label = source_description(source_type, target)
+    print(f"\nLive VLM QA started ({label}, provider={provider}).")
     print("Ask questions like:")
     print("- What objects are visible?")
     print("- Is there a person in front of the camera?")

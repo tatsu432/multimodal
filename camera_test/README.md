@@ -2,55 +2,68 @@
 
 Lightweight scripts for testing live camera streams before using the full pipeline in `vlm_smoke` and `memory_log`.
 
-All scripts support **RTMP** (e.g. GoPro relay) and **RTSP** (e.g. Tapo IP camera).
+All scripts support **RTMP** (e.g. GoPro relay), **RTSP** (e.g. Tapo IP camera), **webcam**, and **local video files**.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `stream_config.py` | Shared stream helpers: resolve protocol/URL from env or CLI, open `cv2.VideoCapture` |
-| `preview_rtmp.py` | Live preview only — no saving, no VLM |
+| `stream_config.py` | Shared helpers: resolve source type/URL from env or CLI, open `cv2.VideoCapture` |
+| `preview_stream.py` | Live preview only — no saving, no VLM |
 | `frame_sample.py` | Live preview + save a JPEG every 2 seconds to `sampled_frames/` |
-| `live_vlm_qa.py` | Live preview in background + ask a VLM questions about recent frames in a REPL |
+| `live_vlm_qa.py` | Background capture + ask a VLM questions about recent frames in a REPL |
 
-## Prerequisites
-
-From the repo root:
-
-```bash
-uv sync
-```
-
-Scripts load environment variables from `.env` in the current directory or a parent directory (typically the repo root `.env`).
-
-Run every script from inside `camera_test`:
+## Setup
 
 ```bash
 cd camera_test
-uv run --project .. python <script>.py
+cp .env.example .env
+# Edit .env — stream URL, API key for live_vlm_qa, etc.
+uv sync
 ```
 
-`--project ..` uses the root `multimodal` package (OpenCV, dotenv, and for `live_vlm_qa.py` the shared `providers` module).
+Scripts load `.env` from the current directory or a parent directory.
+
+## How to run
+
+From the `camera_test` directory:
+
+```bash
+uv run camera-preview
+uv run camera-sample
+uv run camera-vlm
+```
+
+Or run modules directly:
+
+```bash
+uv run python preview_stream.py
+uv run python frame_sample.py
+uv run python live_vlm_qa.py
+```
 
 ## Configuration
 
-Set these in the repo root `.env` (or `camera_test/.env`):
+Set these in `camera_test/.env` (see [.env.example](.env.example)):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STREAM_PROTOCOL` | `rtmp` | `rtmp` or `rtsp` |
-| `RTMP_URL` | `rtmp://localhost:1935/live/gopro` | Used when protocol is `rtmp` |
-| `RTSP_URL` | `rtsp://localhost:8554/live/gopro` | Used when protocol is `rtsp` |
+| `FRAME_SOURCE_TYPE` | `rtmp` | `rtmp`, `rtsp`, `webcam`, or `video` |
+| `RTMP_URL` | `rtmp://localhost:1935/live/gopro` | Used when source type is `rtmp` |
+| `RTSP_URL` | `rtsp://localhost:8554/live/gopro` | Used when source type is `rtsp` |
+| `WEBCAM_INDEX` | `0` | Webcam device index |
+| `VIDEO_PATH` | — | Required when `FRAME_SOURCE_TYPE=video` |
 
 CLI flags override env:
 
-- `--protocol rtmp|rtsp`
-- `--url <full stream URL>`
+- `--source-type rtmp|rtsp|webcam|video`
+- `--url <stream URL or video path>`
+- `--protocol rtmp|rtsp` — deprecated alias for `--source-type`
 
 ### GoPro (RTMP relay)
 
 ```env
-STREAM_PROTOCOL=rtmp
+FRAME_SOURCE_TYPE=rtmp
 RTMP_URL=rtmp://localhost:1935/live/gopro
 ```
 
@@ -59,7 +72,7 @@ RTMP_URL=rtmp://localhost:1935/live/gopro
 Create a **Camera Account** in the Tapo app first: **Device Settings → Advanced Settings → Camera Account**. This is separate from your Tapo app login.
 
 ```env
-STREAM_PROTOCOL=rtsp
+FRAME_SOURCE_TYPE=rtsp
 RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
 ```
 
@@ -83,15 +96,21 @@ RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
 Confirm the stream opens and frames display correctly.
 
 ```bash
-uv run --project .. python preview_rtmp.py
+uv run camera-preview
 ```
 
 Tapo example:
 
 ```bash
-uv run --project .. python preview_rtmp.py \
-  --protocol rtsp \
+uv run camera-preview \
+  --source-type rtsp \
   --url 'rtsp://camera_user:camera_pass@192.168.1.50:554/stream2'
+```
+
+Webcam:
+
+```bash
+uv run camera-preview --source-type webcam
 ```
 
 Press **`q`** in the preview window to quit.
@@ -101,14 +120,14 @@ Press **`q`** in the preview window to quit.
 Shows a live preview and saves one JPEG every 2 seconds under `camera_test/sampled_frames/`.
 
 ```bash
-uv run --project .. python frame_sample.py
+uv run camera-sample
 ```
 
 With explicit RTSP URL:
 
 ```bash
-uv run --project .. python frame_sample.py \
-  --protocol rtsp \
+uv run camera-sample \
+  --source-type rtsp \
   --url 'rtsp://camera_user:camera_pass@192.168.1.50:554/stream2'
 ```
 
@@ -127,7 +146,7 @@ OPENAI_API_KEY=your-key-here
 ```
 
 ```bash
-uv run --project .. python live_vlm_qa.py --protocol rtsp
+uv run camera-vlm --source-type rtsp
 ```
 
 **Local Ollama (no API key):**
@@ -142,7 +161,7 @@ VLM_MODEL=llava
 ```
 
 ```bash
-uv run --project .. python live_vlm_qa.py --protocol rtsp
+uv run camera-vlm --source-type rtsp
 ```
 
 Example questions:
@@ -168,7 +187,7 @@ Force TCP transport for FFmpeg/OpenCV:
 
 ```bash
 export OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;tcp"
-uv run --project .. python preview_rtmp.py --protocol rtsp --url 'rtsp://...'
+uv run camera-preview --source-type rtsp --url 'rtsp://...'
 ```
 
 **`Failed to read frame` loops**
@@ -178,7 +197,7 @@ The camera may have dropped the connection. Stop with `q` and restart. For RTSP,
 ## Suggested workflow
 
 ```text
-preview_rtmp.py   → confirm stream works
+preview_stream.py → confirm source works
 frame_sample.py   → confirm frames save correctly
 live_vlm_qa.py    → test VLM on live video
 ```
@@ -268,7 +287,7 @@ Example:
 rtsp://192.168.1.50:554/live
 ```
 
-RTSP is usually good for local prototypes where a server or script needs to read frames from a camera. This is what `preview_rtmp.py`, `frame_sample.py`, and `live_vlm_qa.py` use when `STREAM_PROTOCOL=rtsp`.
+RTSP is usually good for local prototypes where a server or script needs to read frames from a camera. This is what `preview_stream.py`, `frame_sample.py`, and `live_vlm_qa.py` use when `FRAME_SOURCE_TYPE=rtsp`.
 
 ### RTMP
 
@@ -562,7 +581,7 @@ Recommended order:
 8. Later, use WebRTC if browser/mobile low-latency interaction is needed.
 ```
 
-Steps 1–6 map directly to the scripts in this folder (`preview_rtmp.py` → `frame_sample.py` → `live_vlm_qa.py`).
+Steps 1–6 map directly to the scripts in this folder (`preview_stream.py` → `frame_sample.py` → `live_vlm_qa.py`).
 
 Initial prototype stack:
 

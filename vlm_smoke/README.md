@@ -99,7 +99,7 @@ Type `q`, `quit`, or `exit` to stop.
 - **Blocking REPL**: The main thread waits for keyboard input; capture runs in a background thread.
 - **No preview window**: Headless-friendly; no `cv2.imshow` in this module.
 - **RTMP startup delay**: You may need to wait a few seconds after launch before frames appear in the buffer.
-- **RTMP reconnects**: Brief read stalls are retried before reconnecting; sustained failures still reconnect. If your relay stops when the last viewer disconnects, avoid running a second RTMP client (e.g. `preview_rtmp.py`) at the same time.
+- **RTMP reconnects**: Brief read stalls are retried before reconnecting; sustained failures still reconnect. If your relay stops when the last viewer disconnects, avoid running a second RTMP client (e.g. `camera_test/preview_stream.py`) at the same time.
 - **API cost and latency**: Each question triggers a VLM API call; latency is logged but not optimized.
 - **Coarse sampling**: Frames are sampled at `RTMP_SAMPLE_INTERVAL_SEC` (default 1 Hz), not every video frame.
 
@@ -115,15 +115,9 @@ Do not expect these in `vlm_smoke` yet:
 - Evaluation harness
 - Efficient VLM research or model comparison
 
-## Legacy scripts
+## Related scripts
 
-The repo root still contains earlier prototypes:
-
-- `live_vlm_qa.py` — original RTMP + VLM REPL
-- `preview_rtmp.py` — RTMP preview window
-- `frame_sample.py` — periodic RTMP frame saving
-
-`vlm_smoke` supersedes `live_vlm_qa.py` for ongoing Phase 1 work.
+Lightweight stream testing lives in `camera_test/` (`preview_stream.py`, `frame_sample.py`, `live_vlm_qa.py`). `vlm_smoke` supersedes `live_vlm_qa.py` for ongoing Phase 1 work.
 
 ## Project layout
 

@@ -1,6 +1,4 @@
 import argparse
-import time
-from pathlib import Path
 
 import cv2
 from dotenv import load_dotenv
@@ -12,15 +10,12 @@ from stream_config import (
     source_description,
 )
 
-SAVE_DIR = Path("sampled_frames")
-INTERVAL_SEC = 2.0
-
 
 def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Sample frames from RTMP, RTSP, a webcam, or a video file."
+        description="Preview a live RTMP/RTSP stream, webcam, or video file."
     )
     add_source_args(parser)
     args = parser.parse_args()
@@ -33,16 +28,12 @@ def main() -> None:
     label = source_description(source_type, target)
     print(f"Opening {label}")
 
-    SAVE_DIR.mkdir(exist_ok=True)
-
     cap = open_stream(target)
 
     if not cap.isOpened():
         raise RuntimeError(f"Could not open {label}")
 
-    last_save_time = 0.0
-    frame_id = 0
-    window_title = f"Camera sample — {source_type}"
+    window_title = f"Camera preview — {source_type}"
 
     try:
         while True:
@@ -56,19 +47,7 @@ def main() -> None:
                     continue
 
                 print("Failed to read frame")
-                time.sleep(1)
-                continue
-
-            now = time.time()
-
-            if now - last_save_time >= INTERVAL_SEC:
-                last_save_time = now
-
-                path = SAVE_DIR / f"frame_{frame_id:06d}.jpg"
-                cv2.imwrite(str(path), frame)
-                print(f"Saved {path}")
-
-                frame_id += 1
+                break
 
             cv2.imshow(window_title, frame)
 
