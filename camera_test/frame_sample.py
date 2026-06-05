@@ -1,44 +1,66 @@
-import cv2
+import argparse
 import time
 from pathlib import Path
 
-RTMP_URL = "rtmp://localhost:1935/live/gopro"
-SAVE_DIR = Path("sampled_frames")
-SAVE_DIR.mkdir(exist_ok=True)
+import cv2
+from dotenv import load_dotenv
 
+from stream_config import add_stream_args, open_stream, resolve_stream
+
+SAVE_DIR = Path("sampled_frames")
 INTERVAL_SEC = 2.0
 
-cap = cv2.VideoCapture(RTMP_URL)
 
-if not cap.isOpened():
-    raise RuntimeError(f"Could not open RTMP stream: {RTMP_URL}")
+def main() -> None:
+    load_dotenv()
 
-last_save_time = 0.0
-frame_id = 0
+    parser = argparse.ArgumentParser(
+        description="Sample frames from a live RTMP or RTSP stream."
+    )
+    add_stream_args(parser)
+    args = parser.parse_args()
 
-while True:
-    ok, frame = cap.read()
-    if not ok:
-        print("Failed to read frame")
-        time.sleep(1)
-        continue
+    protocol, stream_url = resolve_stream(protocol=args.protocol, url=args.url)
+    print(f"Opening {protocol.upper()} stream: {stream_url}")
 
-    now = time.time()
+    SAVE_DIR.mkdir(exist_ok=True)
 
-    if now - last_save_time >= INTERVAL_SEC:
-        last_save_time = now
+    cap = open_stream(stream_url)
 
-        path = SAVE_DIR / f"frame_{frame_id:06d}.jpg"
-        cv2.imwrite(str(path), frame)
-        print(f"Saved {path}")
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open {protocol.upper()} stream: {stream_url}")
 
-        # Later: send this frame to a VLM
-        frame_id += 1
+    last_save_time = 0.0
+    frame_id = 0
+    window_title = f"GoPro {protocol.upper()}"
 
-    cv2.imshow("GoPro RTMP", frame)
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            print("Failed to read frame")
+            time.sleep(1)
+            continue
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        now = time.time()
 
-cap.release()
-cv2.destroyAllWindows()
+        if now - last_save_time >= INTERVAL_SEC:
+            last_save_time = now
+
+            path = SAVE_DIR / f"frame_{frame_id:06d}.jpg"
+            cv2.imwrite(str(path), frame)
+            print(f"Saved {path}")
+
+            # Later: send this frame to a VLM
+            frame_id += 1
+
+        cv2.imshow(window_title, frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

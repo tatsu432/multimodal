@@ -1,3 +1,4 @@
+import argparse
 import base64
 import os
 import threading
@@ -10,6 +11,8 @@ import cv2
 import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from stream_config import add_stream_args, open_stream, resolve_stream
 
 
 @dataclass
@@ -61,19 +64,20 @@ def encode_frame_as_base64_jpeg(
     return base64.b64encode(buffer).decode("utf-8")
 
 
-def capture_rtmp_loop(
-    rtmp_url: str,
+def capture_stream_loop(
+    protocol: str,
+    stream_url: str,
     buffer: LiveFrameBuffer,
     stop_event: threading.Event,
     sample_interval_sec: float = 1.0,
 ) -> None:
     """
-    Continuously reads the RTMP stream and stores sampled recent frames.
+    Continuously reads the live stream and stores sampled recent frames.
     """
-    print(f"[capture] Opening RTMP stream: {rtmp_url}")
+    print(f"[capture] Opening {protocol.upper()} stream: {stream_url}")
 
     while not stop_event.is_set():
-        cap = cv2.VideoCapture(rtmp_url)
+        cap = open_stream(stream_url)
 
         if not cap.isOpened():
             print("[capture] Could not open stream. Retrying in 2 seconds...")
@@ -160,7 +164,13 @@ def ask_vlm_about_recent_frames(
 def main() -> None:
     load_dotenv()
 
-    rtmp_url = os.getenv("RTMP_URL", "rtmp://localhost:1935/live/gopro")
+    parser = argparse.ArgumentParser(
+        description="Ask a VLM questions about a live RTMP or RTSP stream."
+    )
+    add_stream_args(parser)
+    args = parser.parse_args()
+
+    protocol, stream_url = resolve_stream(protocol=args.protocol, url=args.url)
     model = os.getenv("VLM_MODEL", "gpt-5.5")
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -169,14 +179,14 @@ def main() -> None:
     stop_event = threading.Event()
 
     capture_thread = threading.Thread(
-        target=capture_rtmp_loop,
-        args=(rtmp_url, frame_buffer, stop_event),
+        target=capture_stream_loop,
+        args=(protocol, stream_url, frame_buffer, stop_event),
         kwargs={"sample_interval_sec": 1.0},
         daemon=True,
     )
     capture_thread.start()
 
-    print("\nLive VLM QA started.")
+    print(f"\nLive VLM QA started ({protocol.upper()}).")
     print("Ask questions like:")
     print("- What objects are visible?")
     print("- Is there a person in front of the camera?")
