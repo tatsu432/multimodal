@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from providers.ollama import chat as ollama_chat
 
-from stream_config import add_source_args, open_stream, resolve_source, source_description
+from stream_config import add_source_args, open_source, resolve_source, source_description
 
 
 @dataclass
@@ -79,7 +79,7 @@ def capture_stream_loop(
     print(f"[capture] Opening {label}")
 
     while not stop_event.is_set():
-        cap = open_stream(target)
+        cap = open_source(source_type, target)
 
         if not cap.isOpened():
             print("[capture] Could not open source. Retrying in 2 seconds...")
@@ -194,7 +194,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Ask a VLM questions about RTMP, RTSP, webcam, or video frames."
+        description="Ask a VLM questions about RTMP, RTSP, WebRTC, webcam, or video."
     )
     add_source_args(parser)
     args = parser.parse_args()

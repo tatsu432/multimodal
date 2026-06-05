@@ -5,6 +5,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 only-include = [
     "stream_config.py",
+    "webrtc_capture.py",
     "preview_stream.py",
     "frame_sample.py",
     "live_vlm_qa.py",
@@ -17,6 +18,8 @@ description = "Lightweight scripts for testing live camera streams before vlm_sm
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiortc>=1.9.0",
+    "httpx>=0.28.0",
     "multimodal",
     "numpy>=2.4.6",
     "openai>=2.41.0",

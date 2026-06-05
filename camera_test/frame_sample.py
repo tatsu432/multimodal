@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from stream_config import (
     add_source_args,
-    open_stream,
+    open_source,
     resolve_source,
     source_description,
 )
@@ -20,7 +20,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Sample frames from RTMP, RTSP, a webcam, or a video file."
+        description="Sample frames from RTMP, RTSP, WebRTC, webcam, or video."
     )
     add_source_args(parser)
     args = parser.parse_args()
@@ -35,7 +35,7 @@ def main() -> None:
 
     SAVE_DIR.mkdir(exist_ok=True)
 
-    cap = open_stream(target)
+    cap = open_source(source_type, target)
 
     if not cap.isOpened():
         raise RuntimeError(f"Could not open {label}")
@@ -50,7 +50,7 @@ def main() -> None:
             if not ok:
                 if source_type == "video":
                     cap.release()
-                    cap = open_stream(target)
+                    cap = open_source(source_type, target)
                     if not cap.isOpened():
                         raise RuntimeError(f"Could not reopen {label}")
                     continue

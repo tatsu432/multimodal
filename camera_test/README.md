@@ -2,7 +2,7 @@
 
 Lightweight scripts for testing live camera streams before using the full pipeline in `vlm_smoke` and `memory_log`.
 
-All scripts support **RTMP** (e.g. GoPro relay), **RTSP** (e.g. Tapo IP camera), **webcam**, and **local video files**.
+All scripts support **RTMP** (e.g. GoPro relay), **RTSP** (e.g. Tapo IP camera), **WebRTC** (WHEP, e.g. MediaMTX), **webcam**, and **local video files**.
 
 ## Files
 
@@ -48,16 +48,19 @@ Set these in `camera_test/.env` (see [.env.example](.env.example)):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FRAME_SOURCE_TYPE` | `rtmp` | `rtmp`, `rtsp`, `webcam`, or `video` |
+| `FRAME_SOURCE_TYPE` | `rtmp` | `rtmp`, `rtsp`, `webrtc`, `webcam`, or `video` |
 | `RTMP_URL` | `rtmp://localhost:1935/live/gopro` | Used when source type is `rtmp` |
 | `RTSP_URL` | `rtsp://localhost:8554/live/gopro` | Used when source type is `rtsp` |
+| `WEBRTC_URL` | `http://localhost:8889/live/whep` | WHEP endpoint when source type is `webrtc` |
+| `WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | Optional comma-separated STUN/TURN URLs |
+| `WEBRTC_OPEN_TIMEOUT_SEC` | `15` | Seconds to wait for the first WebRTC frame |
 | `WEBCAM_INDEX` | `0` | Webcam device index |
 | `VIDEO_PATH` | — | Required when `FRAME_SOURCE_TYPE=video` |
 
 CLI flags override env:
 
-- `--source-type rtmp|rtsp|webcam|video`
-- `--url <stream URL or video path>`
+- `--source-type rtmp|rtsp|webrtc|webcam|video`
+- `--url <stream URL, WHEP URL, or video path>`
 - `--protocol rtmp|rtsp` — deprecated alias for `--source-type`
 
 ### GoPro (RTMP relay)
@@ -79,6 +82,52 @@ RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
 - `stream1` — higher quality
 - `stream2` — lower bandwidth (good default for sampling and VLM)
 - If the password contains special characters (`@`, `!`, `#`, …), URL-encode them (e.g. `!` → `%21`)
+
+### Tapo → WebRTC via MediaMTX
+
+Tapo cameras speak **RTSP**, not WebRTC. To use `FRAME_SOURCE_TYPE=webrtc`, run [MediaMTX](https://github.com/bluenviron/mediamtx) as a relay: it pulls RTSP from the camera and exposes WebRTC/WHEP on the same path name.
+
+1. Confirm RTSP works in VLC first (see above).
+2. Create `mediamtx.yml` (start MediaMTX with an explicit path: `mediamtx /path/to/mediamtx.yml`). Check the startup log for `configuration loaded from ...` — if MediaMTX loads a different file than the one you edited, you will see `path 'tapo' is not configured`.
+3. Open the browser player at `http://localhost:8889/tapo/` to verify.
+4. Point `camera_test` at the WHEP endpoint:
+
+```yaml
+# mediamtx.yml — Tapo RTSP in, WebRTC/WHEP out
+paths:
+  tapo:
+    source: rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+    sourceOnDemand: no
+    rtspTransport: udp
+```
+
+```env
+FRAME_SOURCE_TYPE=webrtc
+WEBRTC_URL=http://localhost:8889/tapo/whep
+```
+
+```bash
+uv run camera-preview --source-type webrtc
+```
+
+For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no` (see [Latency](#latency-rtsp-vs-webrtc) below). If the stream drops or stutters on Wi‑Fi, switch to `rtspTransport: tcp`.
+
+### WebRTC (WHEP)
+
+WebRTC is consumed via **WHEP** (WebRTC-HTTP Egress Protocol). Point `WEBRTC_URL` at your media server's WHEP endpoint:
+
+```env
+FRAME_SOURCE_TYPE=webrtc
+WEBRTC_URL=http://localhost:8889/live/whep
+```
+
+MediaMTX can also ingest RTMP and expose WebRTC/WHEP on the same path. Publish to path `live`, then:
+
+```bash
+uv run camera-preview --source-type webrtc
+```
+
+If the browser or Python client is on a different network, configure STUN/TURN via `WEBRTC_ICE_SERVERS`.
 
 ### VLM settings (`live_vlm_qa.py` only)
 
@@ -172,6 +221,137 @@ Example questions:
 
 Type **`q`**, **`quit`**, or **`exit`** to stop.
 
+## Latency (RTSP vs WebRTC)
+
+A half-second to one second behind “real time” is **normal** when video goes through RTSP → MediaMTX → WebRTC. For local Python on the same Wi‑Fi, **RTSP direct** is usually the fastest option. Use WebRTC when you want a browser player, multiple clients, or a path toward remote viewing.
+
+| Path | Typical delay (same LAN) | Best for |
+|------|--------------------------|----------|
+| Tapo → RTSP → `camera_test` | ~200–500 ms | Local preview, VLM, frame sampling |
+| Tapo → RTSP → MediaMTX → WebRTC → `camera_test` | ~500 ms–1.5 s (tunable) | Browser preview, relay, WHEP clients |
+
+Even with `rtspTransport: udp` and `sourceOnDemand: no`, the **WebRTC path usually still has more delay than RTSP direct** on the same LAN. Tuning makes the WebRTC chain feel “super fast” compared to its untuned self — it does not make WebRTC faster than skipping MediaMTX altogether.
+
+### What “RTSP → WebRTC” means (MediaMTX as an adapter)
+
+MediaMTX is a **media relay** (think protocol adapter or router for video). It does **not** replace the camera’s video; it **repackages** the same H.264 stream for a different delivery protocol.
+
+```text
+Tapo camera
+  │  H.264 video inside RTSP (camera’s native output)
+  ▼
+MediaMTX  ── pulls RTSP, unwraps packets, forwards as WebRTC/RTP
+  │  same video, different wire format + session rules
+  ▼
+Browser or aiortc (WHEP)  ── WebRTC client
+```
+
+Important details:
+
+- **Codec usually stays the same** (H.264). MediaMTX typically **forwards** without re-encoding when the codec is compatible. It is not “converting MP4 to something else” — it is changing **how packets are transported and negotiated**.
+- **RTSP and WebRTC are transport/session protocols**, not speed ratings. “Slow” vs “fast” depends on **how many hops**, **TCP vs UDP**, **on-demand connects**, and **buffer sizes** — not the label on the protocol.
+- MediaMTX sits in the **middle**: one leg is RTSP (camera → server), the other is WebRTC (server → client). You always pay for **both legs** plus whatever buffering each leg adds.
+
+So yes — **adapter/relay** is the right mental model.
+
+### RTSP is not inherently “slow”
+
+It is easy to hear “RTSP is old” or “WebRTC is real-time” and assume RTSP direct must be worse. For a Tapo on the same Wi‑Fi, **RTSP is often the lowest-latency way to get frames into Python**:
+
+| Myth | Reality |
+|------|---------|
+| “RTSP is slow” | RTSP is a **pull** protocol designed for IP cameras on LANs. Latency is often **200–500 ms** end-to-end when you connect directly. |
+| “WebRTC is always faster” | WebRTC is optimized for **browsers, NAT traversal, and smooth calls** — it intentionally keeps a **jitter buffer** (~200–400 ms). That helps stability, not minimum delay. |
+| “MediaMTX makes it faster” | MediaMTX **adds a hop**. It enables WebRTC/browser access; it does not remove the camera’s RTSP leg. |
+
+What actually made your stream feel slow before tuning was mostly the **RTSP leg into MediaMTX** (`sourceOnDemand: yes`, TCP retransmits) and the **WebRTC jitter buffer** — not RTSP as a protocol being useless.
+
+### Two legs, two different bottlenecks
+
+Split the path by **who talks which protocol**:
+
+```text
+Leg 1 — Tapo → MediaMTX (RTSP)
+  Camera encodes H.264 → RTSP/RTP packets → MediaMTX ingests
+
+Leg 2 — MediaMTX → aiortc (WebRTC)
+  MediaMTX repackages → WebRTC/RTP + ICE/DTLS → aiortc decodes → OpenCV
+```
+
+| Leg | What you tuned | What it fixed |
+|-----|----------------|---------------|
+| **Leg 1 (RTSP into MediaMTX)** | `rtspTransport: udp`, `sourceOnDemand: no` | Removed TCP retry stalls and “cold start” RTSP connects. This is where most of your speed-up came from. |
+| **Leg 2 (WebRTC to aiortc)** | (defaults) | WebRTC still applies jitter buffering and pacing. `camera_test` only keeps the **latest** decoded frame — it does not add a deep queue, but it cannot remove WebRTC’s upstream buffer. |
+
+**There is no special “gain from MediaMTX to aiortc” that beats RTSP direct** — that segment is an extra protocol conversion with its own buffering rules. The win from tuning is making **Leg 1** and session startup snappy so **Leg 2** receives fresh packets immediately.
+
+**RTSP direct** removes Leg 2 entirely:
+
+```text
+Tapo → RTSP → OpenCV/ffmpeg in camera_test   (one protocol, one client)
+```
+
+That is why `FRAME_SOURCE_TYPE=rtsp` is still the fastest option for local VLM work, even after a well-tuned WebRTC relay.
+
+### Why the WebRTC chain can still feel slower
+
+Each hop adds a small buffer on purpose:
+
+```text
+Tapo (H.264 encode)
+  → RTSP transport          ← Leg 1 (tune with udp + sourceOnDemand: no)
+  → MediaMTX (demux / forward)
+  → WebRTC (jitter buffer)  ← Leg 2 (fixed cost for smooth playback)
+  → aiortc decode → OpenCV display
+```
+
+WebRTC trades a bit of latency for smooth playback — it holds a short jitter buffer so uneven packet arrival does not cause stutter. That alone is often **200–400 ms**. `camera_test` does not add a deep queue: `WebRTCCapture` keeps only the latest frame, similar to OpenCV `BUFFERSIZE=1` for RTSP.
+
+### Why `rtspTransport: udp` is faster (on a good LAN)
+
+RTSP can run over **UDP** or **TCP**:
+
+| Transport | Behavior | Latency | Reliability |
+|-----------|----------|---------|-------------|
+| **UDP** | Sends packets without waiting for acknowledgements | Lower — newer frames arrive sooner | Lost packets are skipped; fine for live preview on stable Wi‑Fi |
+| **TCP** | Retransmits lost packets | Higher — the stream can pause while waiting for retries | Better on noisy Wi‑Fi or marginal networks |
+
+On the same LAN with a Tapo camera, **UDP** often feels much snappier because MediaMTX receives the newest packets immediately instead of waiting for TCP to catch up. If you see tearing, frozen frames, or frequent reconnects, switch back to `rtspTransport: tcp`.
+
+### Why `sourceOnDemand: no` is faster
+
+`sourceOnDemand` controls when MediaMTX connects to the camera's RTSP URL:
+
+| Setting | What MediaMTX does | Latency impact |
+|---------|-------------------|----------------|
+| `sourceOnDemand: yes` | Connects to Tapo only when a viewer opens the stream; disconnects when idle | **Slower** — each new viewer triggers RTSP handshake, authentication, and waiting for the next keyframe (GOP). Easy to see 0.5–2 s stalls when opening the browser or restarting preview. |
+| `sourceOnDemand: no` | Keeps pulling RTSP from Tapo continuously | **Faster** — the stream stays “warm”. WebRTC/WHEP clients get frames immediately because MediaMTX already has live video buffered. |
+
+The tradeoff: `sourceOnDemand: no` uses bandwidth even when nobody is watching (Tapo → MediaMTX pull runs 24/7). For a dev machine on the same network, that is usually acceptable.
+
+### Recommended MediaMTX settings for low-latency Tapo WebRTC
+
+```yaml
+paths:
+  tapo:
+    source: rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+    sourceOnDemand: no      # keep RTSP pull alive
+    rtspTransport: udp      # lower latency on stable LAN; use tcp if unstable
+```
+
+Also use **`stream2`** (substream) unless you need full resolution — lower bitrate often means less encode delay.
+
+### When RTSP direct is enough
+
+For `camera-preview`, `camera-sample`, and `camera-vlm` on the same machine, skip MediaMTX entirely:
+
+```env
+FRAME_SOURCE_TYPE=rtsp
+RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+```
+
+Keep the MediaMTX + WebRTC path when you need `http://localhost:8889/tapo/` in a browser or plan to add remote clients later.
+
 ## Troubleshooting
 
 **Stream won't open**
@@ -180,6 +360,14 @@ Type **`q`**, **`quit`**, or **`exit`** to stop.
 2. Confirm camera and computer are on the same LAN.
 3. For Tapo, verify the Camera Account credentials (not your Tapo app password).
 4. Try `stream2` instead of `stream1`.
+
+**`path 'tapo' is not configured` (MediaMTX)**
+
+MediaMTX is not loading the YAML file you edited. Check the startup log for `configuration loaded from ...`, ensure `tapo:` is nested under `paths:` with correct indentation, and start with an explicit path: `mediamtx /path/to/mediamtx.yml`.
+
+**WebRTC preview is laggy (~0.5–1 s)**
+
+Expected for RTSP → WebRTC. Try `sourceOnDemand: no` and `rtspTransport: udp` in `mediamtx.yml`, or use RTSP direct for local Python (see [Latency](#latency-rtsp-vs-webrtc)).
 
 **RTSP works in VLC but not in Python**
 
@@ -192,7 +380,7 @@ uv run camera-preview --source-type rtsp --url 'rtsp://...'
 
 **`Failed to read frame` loops**
 
-The camera may have dropped the connection. Stop with `q` and restart. For RTSP, TCP transport often helps.
+The camera may have dropped the connection. Stop with `q` and restart. For RTSP direct, TCP transport often helps. For MediaMTX → Tapo, try `rtspTransport: tcp` if UDP is unstable.
 
 ## Suggested workflow
 
@@ -287,7 +475,7 @@ Example:
 rtsp://192.168.1.50:554/live
 ```
 
-RTSP is usually good for local prototypes where a server or script needs to read frames from a camera. This is what `preview_stream.py`, `frame_sample.py`, and `live_vlm_qa.py` use when `FRAME_SOURCE_TYPE=rtsp`.
+RTSP is usually good for local prototypes where a server or script needs to read frames from a camera. This is what `preview_stream.py`, `frame_sample.py`, and `live_vlm_qa.py` use when `FRAME_SOURCE_TYPE=rtsp`. For WebRTC, set `FRAME_SOURCE_TYPE=webrtc` and a WHEP URL in `WEBRTC_URL`.
 
 ### RTMP
 
