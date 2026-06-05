@@ -77,11 +77,14 @@ Create a **Camera Account** in the Tapo app first: **Device Settings → Advance
 ```env
 FRAME_SOURCE_TYPE=rtsp
 RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+RTSP_TRANSPORT=tcp
 ```
 
 - `stream1` — higher quality
 - `stream2` — lower bandwidth (good default for sampling and VLM)
 - If the password contains special characters (`@`, `!`, `#`, …), URL-encode them (e.g. `!` → `%21`)
+- **RTSP direct uses `RTSP_URL`**, not `WEBRTC_URL` — WebRTC/WHEP is only for the MediaMTX relay path
+- OpenCV reads Tapo RTSP best with **`RTSP_TRANSPORT=tcp`** (MediaMTX can use UDP; OpenCV/FFmpeg often cannot)
 
 ### Tapo → WebRTC via MediaMTX
 
@@ -369,14 +372,30 @@ MediaMTX is not loading the YAML file you edited. Check the startup log for `con
 
 Expected for RTSP → WebRTC. Try `sourceOnDemand: no` and `rtspTransport: udp` in `mediamtx.yml`, or use RTSP direct for local Python (see [Latency](#latency-rtsp-vs-webrtc)).
 
-**RTSP works in VLC but not in Python**
+**`backend is generally available but can't be used to capture by name` (RTSP)**
 
-Force TCP transport for FFmpeg/OpenCV:
+This OpenCV warning is **misleading**. FFmpeg failed to open the RTSP stream (connection, auth, or transport) — not because the backend is wrong.
+
+Common fixes for Tapo:
+
+1. Use **RTSP direct** settings, not WebRTC:
+
+```env
+FRAME_SOURCE_TYPE=rtsp
+RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+RTSP_TRANSPORT=tcp
+```
+
+2. Confirm the same URL plays in VLC first.
+3. URL-encode special characters in the camera password.
+4. `camera_test` tries `RTSP_TRANSPORT` first, then the other transport automatically. To force one mode:
 
 ```bash
 export OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;tcp"
 uv run camera-preview --source-type rtsp --url 'rtsp://...'
 ```
+
+Use `rtsp_transport;tcp` — **not** `rtsp_flags;tcp` (that invalid option causes the same error).
 
 **`Failed to read frame` loops**
 

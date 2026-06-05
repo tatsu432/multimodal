@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from stream_config import (
     add_source_args,
+    describe_open_failure,
     open_source,
     resolve_source,
     source_description,
@@ -38,7 +39,7 @@ def main() -> None:
     cap = open_source(source_type, target)
 
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open {label}")
+        raise RuntimeError(describe_open_failure(source_type, target, label))
 
     last_save_time = 0.0
     frame_id = 0
