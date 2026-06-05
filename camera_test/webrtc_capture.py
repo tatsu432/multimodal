@@ -100,8 +100,17 @@ async def _negotiate_whep(
             )
         return session_url
 
+    body = response.text.strip()
+    hint = ""
+    if "no stream is available" in body.lower() or response.status_code in {404, 503}:
+        hint = (
+            "\n\nMediaMTX has no active stream on this path. "
+            "The path name in WEBRTC_URL must match the key under paths: in mediamtx.yml "
+            "(e.g. tapo → http://localhost:8889/tapo/whep, not .../live/whep). "
+            "Confirm the browser player works first (http://localhost:8889/<path>/)."
+        )
     raise RuntimeError(
-        f"WHEP negotiation failed ({response.status_code}): {response.text}"
+        f"WHEP negotiation failed ({response.status_code}): {body}{hint}"
     )
 
 
@@ -122,6 +131,7 @@ class WebRTCCapture:
         self._latest_frame: np.ndarray | None = None
         self._opened = False
         self._stop = threading.Event()
+        self._error: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pc: RTCPeerConnection | None = None
         self._session_url: str | None = None
@@ -166,10 +176,15 @@ class WebRTCCapture:
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._main())
-        except Exception:
+        except Exception as exc:
+            self._error = str(exc)
             logger.exception("WebRTC capture thread failed")
         finally:
             self._loop.close()
+
+    @property
+    def last_error(self) -> str | None:
+        return self._error
 
     async def _main(self) -> None:
         configuration = RTCConfiguration(iceServers=self._ice_servers)

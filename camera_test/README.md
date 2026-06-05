@@ -368,6 +368,24 @@ Keep the MediaMTX + WebRTC path when you need `http://localhost:8889/tapo/` in a
 
 MediaMTX is not loading the YAML file you edited. Check the startup log for `configuration loaded from ...`, ensure `tapo:` is nested under `paths:` with correct indentation, and start with an explicit path: `mediamtx /path/to/mediamtx.yml`.
 
+**`no stream is available on path 'live'` (WebRTC / WHEP)**
+
+`WEBRTC_URL` points at path **`live`**, but MediaMTX has no stream there. The path name in the URL must match the key under `paths:` in `mediamtx.yml`:
+
+| `mediamtx.yml` | Browser test | `WEBRTC_URL` |
+|----------------|--------------|--------------|
+| `tapo:` | `http://localhost:8889/tapo/` | `http://localhost:8889/tapo/whep` |
+| `live:` | `http://localhost:8889/live/` | `http://localhost:8889/live/whep` |
+
+For Tapo you likely configured **`tapo`**, not **`live`**. The default `.env.example` used `live` for GoPro/RTMP examples — update `.env`:
+
+```env
+FRAME_SOURCE_TYPE=webrtc
+WEBRTC_URL=http://localhost:8889/tapo/whep
+```
+
+If the browser URL plays video but WHEP still fails, MediaMTX may not be pulling RTSP yet — set `sourceOnDemand: no` or open the browser player once to start the pull.
+
 **WebRTC preview is laggy (~0.5–1 s)**
 
 Expected for RTSP → WebRTC. Try `sourceOnDemand: no` and `rtspTransport: udp` in `mediamtx.yml`, or use RTSP direct for local Python (see [Latency](#latency-rtsp-vs-webrtc)).

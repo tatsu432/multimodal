@@ -39,7 +39,9 @@ def main() -> None:
     cap = open_source(source_type, target)
 
     if not cap.isOpened():
-        raise RuntimeError(describe_open_failure(source_type, target, label))
+        raise RuntimeError(
+            describe_open_failure(source_type, target, label, capture=cap)
+        )
 
     last_save_time = 0.0
     frame_id = 0

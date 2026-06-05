@@ -32,7 +32,9 @@ def main() -> None:
     cap = open_source(source_type, target)
 
     if not cap.isOpened():
-        raise RuntimeError(describe_open_failure(source_type, target, label))
+        raise RuntimeError(
+            describe_open_failure(source_type, target, label, capture=cap)
+        )
 
     window_title = f"Camera preview — {source_type}"
 

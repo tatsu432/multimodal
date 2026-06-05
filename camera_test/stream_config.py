@@ -133,14 +133,52 @@ def open_stream(source: str | int) -> cv2.VideoCapture:
     return cap
 
 
+def _whep_path_name(whep_url: str) -> str:
+    """Extract MediaMTX path from a WHEP URL like http://host:8889/tapo/whep."""
+    path = whep_url.rstrip("/").removesuffix("/whep").rstrip("/")
+    return path.rsplit("/", 1)[-1] if "/" in path else path
+
+
 def describe_open_failure(
     source_type: str,
     target: str | int,
     label: str,
+    *,
+    capture: object | None = None,
 ) -> str:
     lines = [f"Could not open {label}."]
 
-    if source_type == "rtsp":
+    if source_type == "webrtc" and isinstance(target, str):
+        path_name = _whep_path_name(target)
+        lines.extend(
+            [
+                "",
+                "Common cause: WEBRTC_URL path does not match mediamtx.yml.",
+                f"  You requested path: {path_name!r}",
+                f"  WEBRTC_URL={target}",
+                "",
+                "For Tapo via MediaMTX, mediamtx.yml usually defines tapo:, not live:",
+                "  paths:",
+                "    tapo:",
+                "      source: rtsp://camera_user:pass@192.168.1.50:554/stream2",
+                "",
+                "Then set:",
+                "  FRAME_SOURCE_TYPE=webrtc",
+                "  WEBRTC_URL=http://localhost:8889/tapo/whep",
+                "",
+                "Verify in a browser first: http://localhost:8889/tapo/",
+                "If the browser plays but WHEP fails, check STUN/TURN (WEBRTC_ICE_SERVERS).",
+            ]
+        )
+        if target == DEFAULT_WEBRTC_URL:
+            lines.append(
+                "You are on the default .../live/whep URL — "
+                "that only works if MediaMTX path live: is configured and has a stream."
+            )
+        last_error = getattr(capture, "last_error", None)
+        if last_error:
+            lines.extend(["", f"Server/client error: {last_error}"])
+    elif source_type == "rtsp":
         lines.extend(
             [
                 "",
