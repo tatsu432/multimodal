@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
-from providers.ollama import chat as ollama_chat
+from providers.ollama import OllamaError, chat as ollama_chat, ensure_model
 
 from stream_config import (
     StaleStreamDetector,
@@ -250,6 +250,8 @@ def main() -> None:
                 "Set VLM_PROVIDER=ollama to use a local model instead."
             )
         openai_client = OpenAI(api_key=api_key)
+    elif provider == "ollama":
+        ensure_model(model, base_url=ollama_base_url)
 
     frame_buffer = LiveFrameBuffer(max_frames=8)
     stop_event = threading.Event()
@@ -284,15 +286,19 @@ def main() -> None:
             frames = frame_buffer.get_latest()
 
             print("VLM: thinking...")
-            answer = ask_vlm_about_recent_frames(
-                provider=provider,
-                model=model,
-                question=question,
-                frames=frames,
-                max_frames_to_send=4,
-                openai_client=openai_client,
-                ollama_base_url=ollama_base_url,
-            )
+            try:
+                answer = ask_vlm_about_recent_frames(
+                    provider=provider,
+                    model=model,
+                    question=question,
+                    frames=frames,
+                    max_frames_to_send=4,
+                    openai_client=openai_client,
+                    ollama_base_url=ollama_base_url,
+                )
+            except OllamaError as exc:
+                print(f"\nVLM error: {exc}\n")
+                continue
 
             print(f"\nVLM: {answer}\n")
 

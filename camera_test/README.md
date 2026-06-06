@@ -261,8 +261,32 @@ Optional WHEP probe (often fails with `webrtcEncryption` + aiortc — see Troubl
 uv run camera-whep-probe --url https://localhost:8889/phone/whep
 ```
 
-### VLM settings (`live_vlm_qa.py` only)
+### VLM settings (`camera-vlm` only)
 
+Switch between cloud OpenAI and local Ollama in `.env`:
+
+**OpenAI (API key required)**
+
+```env
+VLM_PROVIDER=openai
+VLM_MODEL=gpt-5.5
+OPENAI_API_KEY=sk-...
+```
+
+**Local Ollama (no API key)** — requires a **vision** model (text-only models like `qwen3` or `deepseek-r1` cannot see camera frames):
+
+```bash
+# Install Ollama: https://ollama.com — then pull a vision model:
+ollama pull llava
+# alternatives: ollama pull llama3.2-vision   ollama pull qwen2.5vl:7b
+ollama list   # confirm the model name
+```
+
+```env
+VLM_PROVIDER=ollama
+VLM_MODEL=llava
+OLLAMA_BASE_URL=http://localhost:11434
+```
 
 | Variable          | Default                  | Description                                       |
 | ----------------- | ------------------------ | ------------------------------------------------- |
@@ -270,6 +294,8 @@ uv run camera-whep-probe --url https://localhost:8889/phone/whep
 | `VLM_MODEL`       | `gpt-5.5`                | OpenAI model name, or Ollama model (e.g. `llava`) |
 | `OPENAI_API_KEY`  | —                        | Required when `VLM_PROVIDER=openai`               |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL                                 |
+
+**Common error:** `model 'llava' not found` — the name in `VLM_MODEL` must match an installed Ollama model exactly (`ollama list`). Run `ollama pull llava` first.
 
 
 ## Usage
