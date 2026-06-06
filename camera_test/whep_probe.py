@@ -41,7 +41,7 @@ async def probe(whep_url: str, ice_env: str | None, timeout_sec: float) -> int:
 
         whep_ice = await fetch_whep_ice_servers(client, whep_url)
         env_ice = parse_ice_servers(ice_env)
-        ice_servers = resolve_ice_servers(whep_ice, env_ice)
+        ice_servers = resolve_ice_servers(whep_ice, env_ice, whep_url=whep_url)
         print(f"Resolved ICE servers: {[s.urls for s in ice_servers]}")
         print()
 
@@ -49,6 +49,7 @@ async def probe(whep_url: str, ice_env: str | None, timeout_sec: float) -> int:
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
         pc.addTransceiver("video", direction="recvonly")
         pc.addTransceiver("audio", direction="recvonly")
+        pc.createDataChannel("")
         session_url: str | None = None
 
         try:

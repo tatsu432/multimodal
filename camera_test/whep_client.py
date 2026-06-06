@@ -10,7 +10,8 @@ import ssl
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urljoin
+from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlparse
 
 import certifi
 import httpx
@@ -153,15 +154,134 @@ async def fetch_whep_ice_servers(
     return servers
 
 
+def _is_local_whep(whep_url: str) -> bool:
+    host = (urlparse(whep_url).hostname or "").lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def resolve_ice_servers(
     whep_servers: list[RTCIceServer],
     env_servers: list[RTCIceServer],
+    *,
+    whep_url: str | None = None,
 ) -> list[RTCIceServer]:
     if env_servers:
         return env_servers
     if whep_servers:
         return whep_servers
+    # Local MediaMTX exposes host candidates via webrtcAdditionalHosts; STUN adds
+    # srflx candidates that can confuse aiortc ICE/DTLS with localhost WHEP.
+    if whep_url and _is_local_whep(whep_url):
+        return []
     return [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+
+
+@dataclass
+class _OfferIceData:
+    ice_ufrag: str
+    ice_pwd: str
+    medias: list[str] = field(default_factory=list)
+
+
+def _parse_offer_sdp(sdp: str) -> _OfferIceData:
+    """Parse ICE credentials and m= lines (MediaMTX trickle-ice-sdpfrag format)."""
+    data = _OfferIceData(ice_ufrag="", ice_pwd="")
+    for line in sdp.replace("\r\n", "\n").split("\n"):
+        if line.startswith("m="):
+            data.medias.append(line[2:])
+        elif not data.ice_ufrag and line.startswith("a=ice-ufrag:"):
+            data.ice_ufrag = line[len("a=ice-ufrag:") :]
+        elif not data.ice_pwd and line.startswith("a=ice-pwd:"):
+            data.ice_pwd = line[len("a=ice-pwd:") :]
+    return data
+
+
+def _sdp_is_bundled(sdp: str) -> bool:
+    return any(
+        line.startswith("a=group:BUNDLE")
+        for line in sdp.replace("\r\n", "\n").split("\n")
+    )
+
+
+def _extract_candidates_from_sdp(
+    sdp: str,
+    *,
+    bundled_only: bool = True,
+) -> list[tuple[int, str]]:
+    """Return (media_index, candidate_line) pairs from a local SDP."""
+    is_bundled = _sdp_is_bundled(sdp)
+    mid = -1
+    out: list[tuple[int, str]] = []
+    for line in sdp.replace("\r\n", "\n").split("\n"):
+        if line.startswith("m="):
+            mid += 1
+        elif line.startswith("a=candidate:"):
+            if bundled_only and is_bundled and mid != 0:
+                continue
+            out.append((mid, line[2:]))
+    return out
+
+
+def _generate_trickle_sdp_fragment(
+    offer_data: _OfferIceData,
+    candidates: list[tuple[int, str]],
+) -> str:
+    by_media: dict[int, list[str]] = {}
+    for mid, candidate in candidates:
+        by_media.setdefault(mid, []).append(candidate)
+
+    lines = [
+        f"a=ice-ufrag:{offer_data.ice_ufrag}",
+        f"a=ice-pwd:{offer_data.ice_pwd}",
+    ]
+    for mid, media in enumerate(offer_data.medias):
+        media_candidates = by_media.get(mid)
+        if not media_candidates:
+            continue
+        lines.append(f"m={media}")
+        lines.append(f"a=mid:{mid}")
+        lines.extend(f"a={candidate}" for candidate in media_candidates)
+    return "\r\n".join(lines) + "\r\n"
+
+
+async def _patch_trickle_candidates(
+    client: httpx.AsyncClient,
+    session_url: str,
+    offer_data: _OfferIceData,
+    candidates: list[tuple[int, str]],
+) -> None:
+    """Send candidates one PATCH at a time (MediaMTX reader.js behaviour)."""
+    if not candidates:
+        return
+    # Bundled sessions only need the BUNDLE master (mid 0) in the fragment.
+    if _sdp_is_bundled("\n".join(f"m={m}" for m in offer_data.medias)):
+        offer_data = _OfferIceData(
+            ice_ufrag=offer_data.ice_ufrag,
+            ice_pwd=offer_data.ice_pwd,
+            medias=offer_data.medias[:1],
+        )
+        candidates = [(0, cand) for mid, cand in candidates if mid == 0]
+
+    seen: set[str] = set()
+    for mid, candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        body = _generate_trickle_sdp_fragment(offer_data, [(mid, candidate)])
+        response = await client.patch(
+            session_url,
+            content=body,
+            headers={
+                "Content-Type": "application/trickle-ice-sdpfrag",
+                "If-Match": "*",
+            },
+            timeout=30.0,
+        )
+        if response.status_code not in {200, 204}:
+            raise RuntimeError(
+                f"WHEP trickle-ICE PATCH failed ({response.status_code}): "
+                f"{response.text.strip()}"
+            )
 
 
 def connection_state_summary(pc: RTCPeerConnection) -> str:
@@ -228,9 +348,9 @@ async def wait_for_ice_connected(
         ):
             hint = (
                 "\n\nICE completed but DTLS never finished (connection stuck at 'connecting'). "
-                "This often happens with MediaMTX phone + webrtcEncryption + Python aiortc. "
-                "Use the RTSP relay instead: rtsp://127.0.0.1:8554/phone "
-                "(set PHONE_STREAM_URL in .env; phone-webrtc uses this by default)."
+                "For MediaMTX + aiortc, ensure trickle-ICE PATCH is reaching the WHEP session "
+                "(see whep_client.negotiate_whep). With phone + webrtcEncryption, WHEP may "
+                "still fail — use the RTSP relay: rtsp://127.0.0.1:8554/phone."
             )
         raise RuntimeError(
             f"WebRTC peer connection timed out after {timeout_sec:.0f}s "
@@ -251,31 +371,44 @@ async def negotiate_whep(
     whep_url: str,
     pc: RTCPeerConnection,
 ) -> str | None:
+    """
+    WHEP offer/answer with MediaMTX-compatible trickle ICE.
+
+    MediaMTX's browser reader POSTs the offer before all candidates are known,
+    then PATCHes ``application/trickle-ice-sdpfrag`` to the session URL. aiortc
+    gathers synchronously, so we POST a candidate-free offer, set local+remote
+    descriptions, then PATCH the gathered candidates (reader.js flow).
+    """
     offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-    await wait_for_ice_gathering(pc)
-
-    if pc.localDescription is None:
-        raise RuntimeError("WebRTC local description was not created")
-
-    if "candidate" not in pc.localDescription.sdp:
-        raise RuntimeError(
-            "SDP offer contains no ICE candidates. aiortc requires non-trickle ICE — "
-            "wait for iceGatheringState=complete before POSTing to WHEP."
-        )
+    post_sdp = offer.sdp
+    post_offer_data = _parse_offer_sdp(post_sdp)
 
     response = await client.post(
         whep_url,
-        content=pc.localDescription.sdp,
+        content=post_sdp,
         headers={"Content-Type": "application/sdp"},
         timeout=30.0,
     )
 
     if response.status_code == 201:
+        session_url = response.headers.get("Location")
+        session_url = urljoin(whep_url, session_url) if session_url else None
         answer = RTCSessionDescription(sdp=response.text, type="answer")
+
+        await pc.setLocalDescription(offer)
+        if pc.localDescription is None:
+            raise RuntimeError("WebRTC local description was not created")
+
+        candidates = _extract_candidates_from_sdp(pc.localDescription.sdp)
         await pc.setRemoteDescription(answer)
-        location = response.headers.get("Location")
-        return urljoin(whep_url, location) if location else None
+
+        # PATCH m= lines must match the POSTed offer (MediaMTX session state), not the
+        # post-gather local SDP where ports differ from the placeholder 9.
+        if session_url and candidates:
+            await _patch_trickle_candidates(
+                client, session_url, post_offer_data, candidates
+            )
+        return session_url
 
     if response.status_code == 406:
         remote = RTCSessionDescription(sdp=response.text, type="offer")
@@ -337,7 +470,9 @@ async def run_whep_stream(
 
     async with create_whep_http_client() as client:
         whep_ice = await fetch_whep_ice_servers(client, whep_url)
-        resolved = resolve_ice_servers(whep_ice, ice_servers or [])
+        resolved = resolve_ice_servers(
+            whep_ice, ice_servers or [], whep_url=whep_url
+        )
         logger.info(
             "WHEP ICE servers: %s",
             [getattr(s, "urls", s) for s in resolved],
@@ -357,6 +492,8 @@ async def run_whep_stream(
 
             pc.addTransceiver("video", direction="recvonly")
             pc.addTransceiver("audio", direction="recvonly")
+            # Match MediaMTX embedded reader.js (SCTP m=application in BUNDLE).
+            pc.createDataChannel("")
 
             session_url = await negotiate_whep(client, whep_url, pc)
             await wait_for_ice_connected(pc, open_timeout_sec)

@@ -24,8 +24,10 @@ Supported setups:
 | `whep_client.py`             | Core WHEP/ICE logic (aiortc)                                           |
 | `whep_worker.py`             | Subprocess worker — streams frames to parent (no OpenCV in child)      |
 | `whep_probe.py`              | Diagnose WHEP OPTIONS/POST/ICE (`camera-whep-probe`)                   |
-| `mediamtx-tapo.example.yml`  | Example MediaMTX config for Tapo → WebRTC/WHEP                         |
-| `mediamtx-phone.example.yml` | Example MediaMTX config for smartphone → WebRTC/WHEP                   |
+| `mediamtx-tapo.example.yml`  | Template MediaMTX config for Tapo → WebRTC/WHEP (copy to `mediamtx-tapo.yml`)   |
+| `mediamtx-phone.example.yml` | Template MediaMTX config for phone → WebRTC/WHEP (copy to `mediamtx-phone.yml`) |
+| `mediamtx-tapo.yml`          | Your local Tapo MediaMTX config (gitignored — create from example)              |
+| `mediamtx-phone.yml`         | Your local phone MediaMTX config (gitignored — create from example)             |
 
 
 ## Setup
@@ -38,6 +40,26 @@ uv sync
 ```
 
 Scripts load `.env` from the current directory or a parent directory.
+
+### MediaMTX config (Tapo WebRTC and phone WebRTC)
+
+MediaMTX does not read the `.example.yml` files directly. Copy each template once, edit your local copy (RTSP URL, LAN IP, certs), then launch MediaMTX with that file:
+
+```bash
+cd camera_test
+cp mediamtx-tapo.example.yml mediamtx-tapo.yml    # Tapo RTSP → WebRTC/WHEP
+cp mediamtx-phone.example.yml mediamtx-phone.yml  # phone WebRTC publish → WHEP/RTSP
+# Edit mediamtx-tapo.yml (camera RTSP URL) and/or mediamtx-phone.yml (LAN IP, certs)
+```
+
+`mediamtx-tapo.yml` and `mediamtx-phone.yml` are **gitignored** so camera URLs and TLS paths stay local.
+
+```bash
+mediamtx mediamtx-tapo.yml    # Tapo relay
+mediamtx mediamtx-phone.yml   # phone publish
+```
+
+Use only the config you need — Tapo WebRTC requires `mediamtx-tapo.yml`; phone-as-camera requires `mediamtx-phone.yml` (often with mkcert TLS; see [§3 Smartphone with WebRTC](#3-smartphone-with-webrtc)).
 
 ## How to run
 
@@ -110,14 +132,16 @@ uv run camera-preview --camera tapo-rtsp
 Tapo cameras speak **RTSP**, not WebRTC. To use `CAMERA_SOURCE=tapo-webrtc`, run [MediaMTX](https://github.com/bluenviron/mediamtx) as a relay: it pulls RTSP from the camera and exposes WebRTC/WHEP.
 
 1. Confirm RTSP works in VLC first (see above).
-2. Start MediaMTX with an explicit config:
+2. Copy and edit the Tapo config if you have not already (see [MediaMTX config](#mediamtx-config-tapo-webrtc-and-phone-webrtc)): set your camera RTSP URL under `paths.tapo.source` in `mediamtx-tapo.yml`.
+3. Start MediaMTX:
 
 ```bash
-mediamtx /path/to/mediamtx-tapo.example.yml
+cd camera_test
+mediamtx mediamtx-tapo.yml
 ```
 
-1. Open the browser player at `http://localhost:8889/tapo/` to verify.
-2. Point `camera_test` at the WHEP endpoint:
+4. Open the browser player at `http://localhost:8889/tapo/` to verify.
+5. Point `camera_test` at the WHEP endpoint:
 
 ```env
 CAMERA_SOURCE=tapo-webrtc
@@ -129,7 +153,7 @@ uv run camera-whep-probe --url http://localhost:8889/tapo/whep
 uv run camera-preview --camera tapo-webrtc
 ```
 
-Example config: `[mediamtx-tapo.example.yml](mediamtx-tapo.example.yml)`. For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no`. If the stream drops on Wi‑Fi, switch to `rtspTransport: tcp`.
+Example template: [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml) → your local [`mediamtx-tapo.yml`](mediamtx-tapo.yml). For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no`. If the stream drops on Wi‑Fi, switch to `rtspTransport: tcp`.
 
 For local Python on the same Wi‑Fi, **RTSP direct** (`tapo-rtsp`) is usually faster than RTSP → MediaMTX → WebRTC.
 
@@ -156,18 +180,19 @@ mkcert -key-file mediamtx-certs/server.key -cert-file mediamtx-certs/server.crt 
 
 Install the mkcert root CA on your phone too (mkcert prints how; on iOS: Settings → General → About → Certificate Trust Settings).
 
-`[mediamtx-phone.example.yml](mediamtx-phone.example.yml)` already points at those cert paths and sets `webrtcEncryption: yes`. Add your LAN IP under `webrtcAdditionalHosts`.
+Copy [`mediamtx-phone.example.yml`](mediamtx-phone.example.yml) to `mediamtx-phone.yml` if you have not already (see [MediaMTX config](#mediamtx-config-tapo-webrtc-and-phone-webrtc)). That file points at `mediamtx-certs/` and sets `webrtcEncryption: yes`. Add your LAN IP under `webrtcAdditionalHosts`.
 
 #### Run
 
 1. Start MediaMTX:
 
 ```bash
-mediamtx /path/to/mediamtx-phone.example.yml
+cd camera_test
+mediamtx mediamtx-phone.yml
 ```
 
-1. Note your Mac's **LAN IP** (e.g. `192.168.1.100`). The phone must reach it on the **same Wi‑Fi**.
-2. On the phone, open (**https**, not http):
+2. Note your Mac's **LAN IP** (e.g. `192.168.1.100`). The phone must reach it on the **same Wi‑Fi**.
+3. On the phone, open (**https**, not http):
 
 ```text
 https://192.168.1.100:8889/phone/publish
@@ -175,7 +200,7 @@ https://192.168.1.100:8889/phone/publish
 
 Allow camera access and start publishing. (OBS/WHIP: `https://192.168.1.100:8889/phone/whip`.)
 4. Verify on your Mac: `https://localhost:8889/phone/`
-5. Point `camera_test` at the RTSP relay (path name must match `mediamtx.yml`):
+5. Point `camera_test` at the RTSP relay (path name must match `mediamtx-phone.yml`):
 
 ```env
 CAMERA_SOURCE=phone-webrtc
@@ -283,15 +308,15 @@ OpenCV and aiortc each ship FFmpeg libraries. When both load in one process, mac
 
 `**path 'tapo' is not configured` (MediaMTX)**
 
-MediaMTX is not loading the YAML file you edited. Start with an explicit path: `mediamtx /path/to/mediamtx.yml`.
+MediaMTX is not loading the YAML file you edited. Copy the example to `mediamtx-tapo.yml` or `mediamtx-phone.yml`, edit that file, and start with an explicit path: `mediamtx mediamtx-tapo.yml` (from `camera_test/`).
 
 `**no stream is available on path` (WebRTC / WHEP)**
 
 
-| Setup        | `mediamtx.yml` | Browser test                    | Python URL                                 |
-| ------------ | -------------- | ------------------------------- | ------------------------------------------ |
-| Tapo WebRTC  | `tapo:`        | `http://localhost:8889/tapo/`   | `http://localhost:8889/tapo/whep`          |
-| Phone WebRTC | `phone:`       | `https://localhost:8889/phone/` | `rtsp://127.0.0.1:8554/phone` (RTSP relay) |
+| Setup        | Config file           | Browser test                    | Python URL                                 |
+| ------------ | --------------------- | ------------------------------- | ------------------------------------------ |
+| Tapo WebRTC  | `mediamtx-tapo.yml`   | `http://localhost:8889/tapo/`   | `http://localhost:8889/tapo/whep`          |
+| Phone WebRTC | `mediamtx-phone.yml`  | `https://localhost:8889/phone/` | `rtsp://127.0.0.1:8554/phone` (RTSP relay) |
 
 
 **Tapo WebRTC:** ensure MediaMTX is pulling RTSP (`sourceOnDemand: no` or open the browser player once).
@@ -300,7 +325,7 @@ MediaMTX is not loading the YAML file you edited. Start with an explicit path: `
 
 **Phone publish page: "can't access webcams or microphones"**
 
-You opened `http://` from the phone, or `webrtcEncryption` is off / certs are missing. Browsers block camera access on insecure origins. Enable TLS in `mediamtx-phone.example.yml`, generate certs (see [Phone WebRTC TLS](#phone-webrtc-tls-one-time-setup)), restart MediaMTX, and use `**https://`** on the phone.
+You opened `http://` from the phone, or `webrtcEncryption` is off / certs are missing. Browsers block camera access on insecure origins. Enable TLS in `mediamtx-phone.yml`, generate certs (see [Phone WebRTC TLS](#phone-webrtc-tls-one-time-setup)), restart MediaMTX, and use **`https://`** on the phone.
 
 **Browser HTTPS works, but Python WHEP fails with `CERTIFICATE_VERIFY_FAILED`**
 
@@ -331,13 +356,13 @@ uv run camera-whep-probe --url http://localhost:8889/tapo/whep
 
 Checklist:
 
-1. `WEBRTC_URL` path matches `mediamtx.yml`.
-2. Copy `[mediamtx-tapo.example.yml](mediamtx-tapo.example.yml)` — set `webrtcAdditionalHosts: [127.0.0.1]` (and LAN IP if needed).
+1. `WEBRTC_URL` path matches the `tapo:` path in `mediamtx-tapo.yml`.
+2. In `mediamtx-tapo.yml`, set `webrtcAdditionalHosts: [127.0.0.1]` (and your Mac LAN IP if needed).
 3. Increase timeout: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
 
 **Probe stuck at `ice=checking`**
 
-Add to `mediamtx.yml`:
+Add to `mediamtx-tapo.yml` or `mediamtx-phone.yml`:
 
 - `webrtcAdditionalHosts: [127.0.0.1]` (+ your Mac LAN IP)
 - `webrtcLocalTCPAddress: :8190`

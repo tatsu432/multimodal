@@ -31,6 +31,21 @@ CAMERA_LABELS = {
 }
 
 
+DEFAULT_MEDIAMTX_RTSP_BASE = "rtsp://127.0.0.1:8554"
+
+
+def whep_url_to_rtsp_relay(whep_url: str) -> str:
+    """Map WHEP URL to MediaMTX RTSP relay on the same path (e.g. .../tapo/whep → .../tapo)."""
+    base = os.getenv("MEDIAMTX_RTSP_BASE", DEFAULT_MEDIAMTX_RTSP_BASE).strip().rstrip("/")
+    path_name = _whep_path_name(whep_url)
+    return f"{base}/{path_name}"
+
+
+def _webrtc_preview_via_rtsp() -> bool:
+    """Use MediaMTX RTSP relay for Python preview instead of WHEP/browser capture."""
+    return _env_bool("WEBRTC_PREVIEW_VIA_RTSP", True)
+
+
 def resolve_source(
     camera: str | None = None,
     url: str | None = None,
@@ -61,6 +76,8 @@ def resolve_source(
         ).strip()
         if not webrtc_url:
             raise ValueError("WEBRTC_URL is required when CAMERA_SOURCE=tapo-webrtc")
+        if _webrtc_preview_via_rtsp():
+            return selected, "rtsp", whep_url_to_rtsp_relay(webrtc_url)
         return selected, "webrtc", webrtc_url
 
     stream_url = (url or os.getenv("PHONE_STREAM_URL", DEFAULT_PHONE_RTSP_URL)).strip()
@@ -79,6 +96,8 @@ def resolve_source(
 
 def source_description(camera: str, source_type: str, target: str) -> str:
     label = CAMERA_LABELS.get(camera, camera)
+    if camera == "tapo-webrtc" and source_type == "rtsp":
+        return f"{label} — RTSP relay {target} (Python preview; browser uses WebRTC)"
     if source_type == "webrtc":
         return f"{label} — WHEP ({target})"
     return f"{label} — {target}"
@@ -354,9 +373,12 @@ def describe_open_failure(
                 "",
                 "If the browser plays but Python WHEP fails, run:",
                 "  uv run camera-whep-probe --url <your WHEP URL>",
-                "Common fixes: mediamtx webrtcAdditionalHosts, WEBRTC_OPEN_TIMEOUT_SEC=30.",
-                "WebRTC uses a subprocess worker by default (WEBRTC_IPC=subprocess) to avoid",
-                "loading aiortc and OpenCV in the same process on macOS.",
+                "For tapo-webrtc Python preview, prefer the RTSP relay (default):",
+                "  WEBRTC_PREVIEW_VIA_RTSP=true  → rtsp://127.0.0.1:8554/<path>",
+                "On macOS, aiortc often cannot complete DTLS with MediaMTX — use",
+                "WEBRTC_PREVIEW_VIA_RTSP=true or WEBRTC_IPC=browser (slower).",
+                "  uv sync --extra browser-webrtc && uv run playwright install chromium",
+                "Other fixes: mediamtx webrtcAdditionalHosts, WEBRTC_OPEN_TIMEOUT_SEC=30.",
             ]
         )
         last_error = getattr(capture, "last_error", None)
@@ -385,6 +407,16 @@ def describe_open_failure(
         if target == DEFAULT_RTSP_URL:
             lines.append(
                 "  6. You are still on the default placeholder URL — set your Tapo RTSP URL."
+            )
+        if camera == "tapo-webrtc":
+            lines.extend(
+                [
+                    "",
+                    "Python preview uses the MediaMTX RTSP relay (WEBRTC_PREVIEW_VIA_RTSP=true).",
+                    "Ensure MediaMTX is running and pulling the Tapo RTSP source.",
+                    "For lower latency on localhost, try RTSP_TRANSPORT=udp.",
+                    "Browser WebRTC player: same path at http://localhost:8889/<path>/",
+                ]
             )
     else:
         lines.append("Confirm the source is reachable and .env / CLI flags are correct.")

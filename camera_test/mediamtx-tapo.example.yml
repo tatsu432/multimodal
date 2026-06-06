@@ -15,6 +15,6 @@ webrtcLocalTCPAddress: :8190
 
 paths:
   tapo:
-    source: rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+    source: rtsp://camera_user:camera_pass@camera_ip:554/stream2
     sourceOnDemand: no
     rtspTransport: udp

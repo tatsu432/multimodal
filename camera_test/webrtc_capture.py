@@ -20,15 +20,24 @@ logger = logging.getLogger(__name__)
 
 _CAMERA_TEST_DIR = Path(__file__).resolve().parent
 _WHEP_WORKER_SCRIPT = _CAMERA_TEST_DIR / "whep_worker.py"
+_BROWSER_WHEP_WORKER_SCRIPT = _CAMERA_TEST_DIR / "browser_whep_worker.py"
 
 _FRAME_MAGIC = b"WFRM"
 _ERROR_MAGIC = b"WERR"
 _HEADER = struct.Struct(">4sIII")
 
 
+def _webrtc_ipc_mode() -> str:
+    """subprocess (aiortc), browser (Chromium player), or inprocess."""
+    mode = os.getenv("WEBRTC_IPC", "").strip().lower()
+    if not mode:
+        # aiortc WHEP often fails DTLS with MediaMTX on macOS; Chromium succeeds.
+        mode = "browser" if sys.platform == "darwin" else "subprocess"
+    return mode
+
+
 def _use_subprocess_ipc() -> bool:
-    mode = os.getenv("WEBRTC_IPC", "subprocess").strip().lower()
-    return mode != "inprocess"
+    return _webrtc_ipc_mode() in {"subprocess", "browser"}
 
 
 def _build_worker_command(
@@ -37,38 +46,45 @@ def _build_worker_command(
     ice_servers_env: str | None,
 ) -> list[str]:
     """
-    Build a command that runs whep_worker with the same deps as camera_test.
+    Build a command that runs a WHEP worker with the same deps as camera_test.
 
     Prefer `uv run` so the worker works even when the parent was started from an
     IDE (avoids wrong-interpreter / pip-list environment errors).
     """
+    ipc = _webrtc_ipc_mode()
+    worker_script = (
+        _BROWSER_WHEP_WORKER_SCRIPT if ipc == "browser" else _WHEP_WORKER_SCRIPT
+    )
     args = [
         "--url",
         whep_url,
         "--timeout",
         str(open_timeout_sec),
-        "--ice-servers",
-        ice_servers_env or "",
     ]
+    if ipc != "browser":
+        args.extend(["--ice-servers", ice_servers_env or ""])
+
     uv = shutil.which("uv")
     if uv:
-        return [
+        cmd = [
             uv,
             "run",
             "--directory",
             str(_CAMERA_TEST_DIR),
-            "python",
-            str(_WHEP_WORKER_SCRIPT),
-            *args,
         ]
+        if ipc == "browser":
+            cmd.append("--extra")
+            cmd.append("browser-webrtc")
+        cmd.extend(["python", str(worker_script), *args])
+        return cmd
 
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
         py = Path(venv) / "bin" / "python3"
         if py.is_file():
-            return [str(py), str(_WHEP_WORKER_SCRIPT), *args]
+            return [str(py), str(worker_script), *args]
 
-    return [sys.executable, str(_WHEP_WORKER_SCRIPT), *args]
+    return [sys.executable, str(worker_script), *args]
 
 
 class _InProcessWebRTCCapture:

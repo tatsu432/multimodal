@@ -10,3 +10,6 @@ rtsp_decode.log
 outputs/**/*.jpg
 outputs/**/*.jpeg
 outputs/**/*.png
+
+mediamtx-tapo.yml
+mediamtx-phone.yml

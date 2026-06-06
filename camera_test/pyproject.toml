@@ -7,6 +7,7 @@ only-include = [
     "stream_config.py",
     "whep_client.py",
     "whep_worker.py",
+    "browser_whep_worker.py",
     "whep_probe.py",
     "webrtc_capture.py",
     "preview_stream.py",
@@ -29,6 +30,9 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "python-dotenv>=1.2.2",
 ]
+
+[project.optional-dependencies]
+browser-webrtc = ["playwright>=1.40.0"]
 
 [project.scripts]
 camera-preview = "preview_stream:main"
