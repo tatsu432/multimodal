@@ -52,6 +52,166 @@ cp .env.example .env
 
 See [.env.example](.env.example) for a full template.
 
+## Camera sources (Tapo RTSP, MediaMTX, phone WebRTC)
+
+`vlm_smoke` uses the shared [`capture/`](../capture/) module (same presets as [`camera_test`](../camera_test/README.md)). Set `FRAME_SOURCE_TYPE=camera` and pick a `CAMERA_SOURCE` preset.
+
+MediaMTX configs and TLS certs live under [`camera_test/`](../camera_test/) — copy the example YAML files there once, then use them for both `camera_test` and `vlm_smoke`.
+
+### MediaMTX one-time setup
+
+MediaMTX does not read `.example.yml` files directly. From the repo:
+
+```bash
+cd camera_test
+cp mediamtx-tapo.example.yml mediamtx-tapo.yml    # Tapo RTSP → WebRTC + RTSP relay
+cp mediamtx-phone.example.yml mediamtx-phone.yml  # phone WebRTC publish → RTSP relay
+# Edit mediamtx-tapo.yml (your Tapo RTSP URL) and mediamtx-phone.yml (LAN IP, certs)
+```
+
+`mediamtx-tapo.yml` and `mediamtx-phone.yml` are **gitignored** (camera URLs and cert paths stay local).
+
+```bash
+mediamtx mediamtx-tapo.yml    # Tapo relay — use when CAMERA_SOURCE=tapo-webrtc
+mediamtx mediamtx-phone.yml   # phone publish — use when CAMERA_SOURCE=phone-webrtc
+```
+
+Run only the config you need for your chosen preset.
+
+### 1. Tapo with RTSP (recommended for VLM)
+
+Direct RTSP from the camera — **lowest latency**, no MediaMTX required.
+
+1. In the Tapo app: **Device Settings → Advanced Settings → Camera Account** (username/password for RTSP, not your Tapo login).
+2. Note the camera IP: **Device Settings → Network**.
+3. Test in VLC: *Media → Open Network Stream…*  
+   `rtsp://camera_user:camera_pass@192.168.1.50:554/stream2`
+4. Configure `vlm_smoke/.env`:
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=tapo-rtsp
+RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+RTSP_FLUSH_GRABS=8
+```
+
+- `stream2` — lower bandwidth (good for VLM); `stream1` — higher quality
+- Tapo + OpenCV usually works best with **`RTSP_TRANSPORT=tcp`**
+
+```bash
+cd vlm_smoke
+uv run python -m src.main
+```
+
+FFmpeg warnings go to `rtsp_decode.log` (see `RTSP_FFMPEG_LOG`); the terminal stays for questions and answers.
+
+### 2. Tapo via MediaMTX (optional)
+
+Tapo speaks **RTSP only**. Use this preset if you already run MediaMTX for a browser player or multiple clients. Python reads the **local RTSP relay** (not WHEP) — same as `camera_test`.
+
+1. Confirm direct RTSP works in VLC (see §1).
+2. Set your Tapo RTSP URL in `camera_test/mediamtx-tapo.yml` under `paths.tapo.source`.
+3. Start MediaMTX:
+
+```bash
+cd camera_test
+mediamtx mediamtx-tapo.yml
+```
+
+4. Verify in a browser: `http://localhost:8889/tapo/`
+5. Configure `vlm_smoke/.env`:
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=tapo-webrtc
+WEBRTC_URL=http://localhost:8889/tapo/whep
+# Python uses RTSP relay by default (WEBRTC_PREVIEW_VIA_RTSP=true in capture/)
+# No WHEP in Python — reads:
+#   rtsp://127.0.0.1:8554/tapo
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+```
+
+For lowest latency on the same Wi‑Fi, **Tapo RTSP direct** (§1) is usually faster than MediaMTX relay. WebRTC in the browser is still available at `http://localhost:8889/tapo/`.
+
+### 3. iPhone / smartphone via MediaMTX WebRTC
+
+Phones do not expose RTSP. The phone **publishes WebRTC** to MediaMTX; Python reads **`rtsp://127.0.0.1:8554/phone`**. The stream exists **only while the phone is publishing**.
+
+#### TLS (one-time)
+
+Phone browsers require **HTTPS** for camera access on LAN. Use [mkcert](https://github.com/FiloSottile/mkcert):
+
+```bash
+ipconfig getifaddr en0          # your Mac Wi‑Fi IP, e.g. 192.168.11.51
+brew install mkcert && mkcert -install
+cd camera_test
+mkdir -p mediamtx-certs
+mkcert -key-file mediamtx-certs/server.key -cert-file mediamtx-certs/server.crt \
+  localhost 127.0.0.1 YOUR_MAC_IP
+```
+
+Install the mkcert root CA on your phone (iOS: Settings → General → About → Certificate Trust Settings).  
+Uncomment your LAN IP in `mediamtx-phone.yml` under `webrtcAdditionalHosts`.
+
+Full phone publish settings (codec, bitrate, resolution): see [camera_test README § Publish page settings](../camera_test/README.md#publish-page-settings-before-you-tap-publish).
+
+#### Run
+
+1. Start MediaMTX:
+
+```bash
+cd camera_test
+mediamtx mediamtx-phone.yml
+```
+
+2. On the phone (same Wi‑Fi), open **https** (not http):
+
+```text
+https://YOUR_MAC_IP:8889/phone/publish
+```
+
+Example: `https://192.168.11.51:8889/phone/publish` if `ipconfig getifaddr en0` prints `192.168.11.51`.
+
+3. Tap **Publish**, allow camera. Verify on Mac: `https://localhost:8889/phone/`
+
+4. Configure `vlm_smoke/.env`:
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=phone-webrtc
+PHONE_STREAM_URL=rtsp://127.0.0.1:8554/phone
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+RTSP_FLUSH_GRABS=8
+```
+
+```bash
+cd vlm_smoke
+uv run python -m src.main
+```
+
+Keep the phone publish tab in the foreground; background mobile browsers may pause video.
+
+### Quick reference
+
+| Goal | `CAMERA_SOURCE` | MediaMTX | Python reads |
+|------|-----------------|----------|--------------|
+| Tapo, lowest latency | `tapo-rtsp` | not required | `RTSP_URL` (camera direct) |
+| Tapo + browser WebRTC | `tapo-webrtc` | `mediamtx-tapo.yml` | `rtsp://127.0.0.1:8554/tapo` |
+| iPhone as camera | `phone-webrtc` | `mediamtx-phone.yml` + phone publish | `rtsp://127.0.0.1:8554/phone` |
+
+CLI overrides:
+
+```bash
+uv run python -m src.main --camera tapo-rtsp --url 'rtsp://user:pass@192.168.1.50:554/stream2'
+uv run python -m src.main --camera phone-webrtc --url rtsp://127.0.0.1:8554/phone
+```
+
+More troubleshooting (VLC, ICE, WHEP): [`camera_test/README.md`](../camera_test/README.md).
+
 ## How to run
 
 From the `vlm_smoke` directory:
@@ -65,25 +225,6 @@ CLI overrides (when `FRAME_SOURCE_TYPE=camera`):
 ```bash
 uv run python -m src.main --camera phone-webrtc --url rtsp://127.0.0.1:8554/phone
 ```
-
-### Tapo or iPhone camera (recommended)
-
-Uses shared capture config from [`capture/`](../capture/) (same as `camera_test`):
-
-```bash
-# .env
-FRAME_SOURCE_TYPE=camera
-CAMERA_SOURCE=tapo-rtsp
-RTSP_URL=rtsp://user:pass@192.168.1.50:554/stream2
-RTSP_TRANSPORT=tcp
-RTSP_LOW_LATENCY=true
-
-# or phone via MediaMTX RTSP relay:
-# CAMERA_SOURCE=phone-webrtc
-# PHONE_STREAM_URL=rtsp://127.0.0.1:8554/phone
-```
-
-See [`camera_test/README.md`](../camera_test/README.md) for MediaMTX phone publish setup.
 
 ### RTMP (GoPro live stream)
 
@@ -123,6 +264,31 @@ What text is visible?
 ```
 
 Type `q`, `quit`, or `exit` to stop.
+
+## VLM provider (OpenAI vs Ollama)
+
+**OpenAI**
+
+```env
+VLM_PROVIDER=openai
+VLM_MODEL=gpt-5.5
+OPENAI_API_KEY=sk-...
+```
+
+**Local Ollama** — requires a **vision** model (`ollama pull llava`; text-only models like `qwen3` cannot see frames):
+
+```bash
+ollama pull llava
+ollama list
+```
+
+```env
+VLM_PROVIDER=ollama
+VLM_MODEL=llava
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
+Tune `NUM_FRAMES_PER_QUERY` (default `1`) and `FRAME_BUFFER_SIZE` for multi-frame questions.
 
 ## Current limitations
 

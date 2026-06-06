@@ -55,6 +55,73 @@ uv sync
 | `SAVE_FRAMES` | Save JPEG when a memory is stored |
 | `MAX_RUNTIME_SECONDS` | Optional; unset = run until Ctrl+C |
 
+## Camera sources (Tapo RTSP, MediaMTX, phone WebRTC)
+
+Same presets as [`vlm_smoke`](../vlm_smoke/README.md#camera-sources-tapo-rtsp-mediamtx-phone-webrtc) and [`camera_test`](../camera_test/README.md). Set `FRAME_SOURCE_TYPE=camera` in `memory_log/.env`.
+
+MediaMTX YAML and certs: [`camera_test/`](../camera_test/) (`mediamtx-tapo.yml`, `mediamtx-phone.yml`).
+
+### Tapo RTSP (recommended)
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=tapo-rtsp
+RTSP_URL=rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+RTSP_FLUSH_GRABS=8
+VLM_PROVIDER=openai
+VLM_MODEL=gpt-5.5
+OPENAI_API_KEY=sk-...
+```
+
+Test the same URL in VLC first. Use `stream2` for VLM (lower bandwidth).
+
+### Tapo via MediaMTX
+
+```bash
+cd camera_test && mediamtx mediamtx-tapo.yml
+```
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=tapo-webrtc
+WEBRTC_URL=http://localhost:8889/tapo/whep
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+```
+
+Python reads `rtsp://127.0.0.1:8554/tapo` automatically (RTSP relay, not WHEP).
+
+### iPhone via MediaMTX WebRTC
+
+Requires HTTPS publish from the phone — see [camera_test README § Smartphone](../camera_test/README.md#3-smartphone-with-webrtc) and [Publish page settings](../camera_test/README.md#publish-page-settings-before-you-tap-publish).
+
+```bash
+cd camera_test && mediamtx mediamtx-phone.yml
+# Phone: https://YOUR_MAC_IP:8889/phone/publish  (ipconfig getifaddr en0)
+```
+
+```env
+FRAME_SOURCE_TYPE=camera
+CAMERA_SOURCE=phone-webrtc
+PHONE_STREAM_URL=rtsp://127.0.0.1:8554/phone
+RTSP_TRANSPORT=tcp
+RTSP_LOW_LATENCY=true
+```
+
+### Ollama (local VLM, no API key)
+
+```bash
+ollama pull llava
+```
+
+```env
+VLM_PROVIDER=ollama
+VLM_MODEL=llava
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
 ## Run
 
 ```bash
