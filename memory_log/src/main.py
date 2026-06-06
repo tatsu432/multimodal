@@ -1,10 +1,12 @@
+import argparse
 import logging
 import sys
 import time
 from dataclasses import dataclass, field
 
+from capture.stream_config import add_source_args, configure_decode_logging
 from openai import OpenAIError
-from providers.ollama import OllamaError
+from providers.ollama import OllamaError, ensure_model
 
 from src.config import Config
 from src.frame_source import FrameSource, create_frame_source
@@ -14,6 +16,15 @@ from src.vlm_client import VLMClient, create_vlm_client
 logger = logging.getLogger("memory_log.main")
 
 QUIT_COMMANDS = frozenset({"q", "quit", "exit"})
+
+
+def read_user_question() -> str:
+    """Prompt on stdout — fd 2 may be redirected to rtsp_decode.log for FFmpeg."""
+    sys.stdout.write(
+        "Ask a question about the current view, or type 'q' to quit:\n> "
+    )
+    sys.stdout.flush()
+    return input().strip()
 
 
 @dataclass
@@ -29,14 +40,6 @@ class RunStats:
         if not self.question_latencies:
             return 0.0
         return sum(self.question_latencies) / len(self.question_latencies)
-
-
-def setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
 
 
 def _format_objects(objects: list[str]) -> str:
@@ -164,9 +167,7 @@ def run_repl(
                 break
 
         try:
-            question = input(
-                "Ask a question about the current view, or type 'q' to quit:\n> "
-            ).strip()
+            question = read_user_question()
         except EOFError:
             print()
             break
@@ -198,14 +199,36 @@ def print_run_summary(stats: RunStats) -> None:
 
 
 def main() -> None:
-    setup_logging()
+    from dotenv import load_dotenv
+    from src.config import PROJECT_ROOT
+
+    load_dotenv(PROJECT_ROOT / ".env")
+    configure_decode_logging()
+
+    parser = argparse.ArgumentParser(
+        description="Visual memory logging — GoPro/webcam/video or Tapo/phone cameras."
+    )
+    add_source_args(parser)
+    args = parser.parse_args()
+
     config = Config.from_env()
+    if args.camera:
+        config.camera_preset_override = args.camera
+    if args.url:
+        config.camera_url_override = args.url
 
     try:
         config.validate()
     except ValueError as exc:
         logger.error("%s", exc)
         sys.exit(1)
+
+    if config.vlm_provider == "ollama":
+        try:
+            ensure_model(config.vlm_model, base_url=config.ollama_base_url)
+        except OllamaError as exc:
+            logger.error("%s", exc)
+            sys.exit(1)
 
     source = create_frame_source(config)
     vlm = create_vlm_client(config)

@@ -272,6 +272,22 @@ class VideoFileFrameSource(_ThreadedFrameSource):
 
 
 def create_frame_source(config: Config) -> FrameSource:
+    if config.frame_source_type == "camera":
+        from capture.camera_frame_source import CameraFrameSource
+        from capture.stream_config import resolve_source
+
+        camera, source_type, target = resolve_source(
+            config.camera_preset_override or config.camera_source,
+            config.camera_url_override,
+        )
+        return CameraFrameSource(
+            camera=camera,
+            source_type=source_type,
+            target=target,
+            buffer_size=config.frame_buffer_size,
+            sample_interval_sec=config.capture_sample_interval_sec,
+        )
+
     if config.frame_source_type == "rtmp":
         return RTMPFrameSource(
             rtmp_url=config.rtmp_url,

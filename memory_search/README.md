@@ -44,8 +44,12 @@ Point `MEMORY_JSONL_PATH` at Step 2 output (default: `../memory_log/outputs/memo
 | `DEFAULT_SHOULD_STORE_ONLY` | Only search `should_store=true` records (default `true`) |
 | `TIMEZONE` | Timezone for "today", "recently", etc. (default `Asia/Tokyo`) |
 | `USE_LLM_ANSWERER` | Optional LLM summarization (default `false`) |
-| `OPENAI_API_KEY` | Required only when `USE_LLM_ANSWERER=true` |
+| `LLM_PROVIDER` | `openai` or `ollama` (when LLM answerer enabled) |
 | `LLM_MODEL` | Model for LLM answerer (required when LLM answerer enabled) |
+| `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` and LLM answerer on |
+| `OLLAMA_BASE_URL` | Ollama URL when `LLM_PROVIDER=ollama` |
+
+**Live camera capture** is not in this step — run [`memory_log`](../memory_log/README.md) with `FRAME_SOURCE_TYPE=camera` to record memories from Tapo / phone / RTMP. This module only searches existing JSONL.
 
 ## Run
 

@@ -36,13 +36,16 @@ uv sync
 
 | Variable | Description |
 |----------|-------------|
-| `FRAME_SOURCE_TYPE` | `rtmp`, `webcam`, or `video` |
+| `FRAME_SOURCE_TYPE` | `camera`, `rtmp`, `webcam`, or `video` |
+| `CAMERA_SOURCE` | When `camera`: `tapo-rtsp`, `tapo-webrtc`, `phone-webrtc` |
+| `RTSP_URL`, `PHONE_STREAM_URL`, `RTSP_*` | Same as [`camera_test`](../camera_test/README.md) |
 | `RTMP_URL` | RTMP stream URL |
 | `WEBCAM_INDEX` | Webcam device index (default `0`) |
 | `VIDEO_PATH` | Required when `FRAME_SOURCE_TYPE=video` |
-| `VLM_PROVIDER` | `openai` |
-| `VLM_MODEL` | Vision-capable model |
-| `OPENAI_API_KEY` | Required |
+| `VLM_PROVIDER` | `openai` or `ollama` |
+| `VLM_MODEL` | Vision model (e.g. `gpt-5.5`, `llava`) |
+| `OPENAI_API_KEY` | Required when `VLM_PROVIDER=openai` |
+| `OLLAMA_BASE_URL` | Ollama URL when `VLM_PROVIDER=ollama` |
 | `FRAME_BUFFER_SIZE` | Ring buffer size for recent frames (default `8`) |
 | `CAPTURE_SAMPLE_INTERVAL_SEC` | How often the background thread adds frames (default `1.0`) — **not** memory write interval |
 | `NUM_FRAMES_PER_QUERY` | Frames sent to Q&A per question (default `1`) |
@@ -57,6 +60,7 @@ uv sync
 ```bash
 cd memory_log
 uv run python -m src.main
+# CLI: --camera phone-webrtc --url rtsp://127.0.0.1:8554/phone
 ```
 
 Wait a few seconds for the capture buffer to fill, then type a question. Type `q` to quit.
@@ -143,7 +147,7 @@ Run summary:
 ## Known limitations
 
 - **Two API calls per question** — answer + structured memory (cost/latency).
-- **OpenAI only** — same provider support as Step 1.
+- **OpenAI + Ollama** — set `VLM_PROVIDER` / `VLM_MODEL` (Ollama needs a vision model, e.g. `llava`).
 - **No retrieval** — no search over memories yet.
 - **`should_store: false`** — Q&A still prints; JSONL and frame save are skipped.
 - **No GPS** — location label only.

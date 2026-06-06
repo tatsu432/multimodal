@@ -53,8 +53,12 @@ First run downloads the default `sentence-transformers/all-MiniLM-L6-v2` weights
 | `DEFAULT_SHOULD_STORE_ONLY` | Index/search only `should_store=true` (default `true`) |
 | `TIMEZONE` | Timezone for relative time phrases (default `Asia/Tokyo`) |
 | `USE_LLM_ANSWERER` | Optional LLM summary (default `false`) |
+| `LLM_PROVIDER` | `openai` or `ollama` (when LLM answerer enabled) |
 | `LLM_MODEL` | Model when LLM answerer enabled |
+| `OLLAMA_BASE_URL` | Ollama URL when `LLM_PROVIDER=ollama` |
 | `REBUILD_INDEX` | `true` clears and rebuilds Chroma collection (default `false`) |
+
+**Live camera + VLM** — configure in [`memory_log`](../memory_log/README.md) (`FRAME_SOURCE_TYPE=camera`). This step searches indexed JSONL only.
 
 ## Build or rebuild the Chroma index
 

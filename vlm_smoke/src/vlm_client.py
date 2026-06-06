@@ -15,6 +15,9 @@ SOURCE_PROMPTS = {
     "rtmp": "a live GoPro camera stream",
     "webcam": "a live webcam feed",
     "video": "a video recording",
+    "tapo-rtsp": "a Tapo IP camera stream (RTSP)",
+    "tapo-webrtc": "a Tapo camera stream via MediaMTX",
+    "phone-webrtc": "a smartphone camera stream via MediaMTX",
 }
 
 
@@ -167,17 +170,18 @@ class OllamaVLMClient(VLMClient):
 
 
 def create_vlm_client(config: Config) -> VLMClient:
+    source_key = config.vlm_source_key
     if config.vlm_provider == "openai":
         return OpenAIVLMClient(
             api_key=config.openai_api_key,
             model=config.vlm_model,
-            frame_source_type=config.frame_source_type,
+            frame_source_type=source_key,
         )
 
     if config.vlm_provider == "ollama":
         return OllamaVLMClient(
             model=config.vlm_model,
-            frame_source_type=config.frame_source_type,
+            frame_source_type=source_key,
             base_url=config.ollama_base_url,
         )
 

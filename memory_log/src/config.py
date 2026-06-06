@@ -7,13 +7,16 @@ from dotenv import load_dotenv
 from src.utils import parse_bool_env, parse_optional_float_env
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VALID_FRAME_SOURCE_TYPES = frozenset({"rtmp", "webcam", "video"})
+VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "rtmp", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 
 
 @dataclass
 class Config:
     frame_source_type: str
+    camera_source: str
+    camera_preset_override: str | None
+    camera_url_override: str | None
     rtmp_url: str
     webcam_index: int
     video_path: str
@@ -53,6 +56,9 @@ class Config:
             frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "rtmp")
             .strip()
             .lower(),
+            camera_source=os.getenv("CAMERA_SOURCE", "tapo-rtsp").strip().lower(),
+            camera_preset_override=None,
+            camera_url_override=None,
             rtmp_url=os.getenv("RTMP_URL", "rtmp://localhost:1935/live/gopro"),
             webcam_index=int(os.getenv("WEBCAM_INDEX", "0")),
             video_path=os.getenv("VIDEO_PATH", "").strip(),
@@ -93,6 +99,14 @@ class Config:
             if not video.is_file():
                 raise ValueError(f"Video file not found: {video}")
 
+        if self.frame_source_type == "camera":
+            from capture.stream_config import resolve_source
+
+            resolve_source(
+                self.camera_preset_override or self.camera_source,
+                self.camera_url_override,
+            )
+
         if self.vlm_provider not in VALID_VLM_PROVIDERS:
             raise ValueError(
                 f"VLM_PROVIDER must be one of {sorted(VALID_VLM_PROVIDERS)}, "
@@ -123,3 +137,9 @@ class Config:
             and self.max_runtime_seconds <= 0
         ):
             raise ValueError("MAX_RUNTIME_SECONDS must be positive when set")
+
+    @property
+    def vlm_source_key(self) -> str:
+        if self.frame_source_type == "camera":
+            return self.camera_preset_override or self.camera_source
+        return self.frame_source_type
