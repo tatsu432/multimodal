@@ -4,25 +4,29 @@ Lightweight scripts for testing live camera streams before using the full pipeli
 
 Supported setups:
 
-| `CAMERA_SOURCE` | Camera | Path |
-|-----------------|--------|------|
-| `tapo-rtsp` | Tapo IP camera | RTSP direct → OpenCV |
-| `tapo-webrtc` | Tapo IP camera | RTSP → MediaMTX → WHEP |
-| `phone-webrtc` | Smartphone | WebRTC publish → MediaMTX → WHEP |
+
+| `CAMERA_SOURCE` | Camera         | Path                             |
+| --------------- | -------------- | -------------------------------- |
+| `tapo-rtsp`     | Tapo IP camera | RTSP direct → OpenCV             |
+| `tapo-webrtc`   | Tapo IP camera | RTSP → MediaMTX → WHEP           |
+| `phone-webrtc`  | Smartphone     | WebRTC publish → MediaMTX → WHEP |
+
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `stream_config.py` | Shared helpers: resolve camera preset from env or CLI, open capture |
-| `preview_stream.py` | Live preview only — no saving, no VLM |
-| `frame_sample.py` | Live preview + save a JPEG every 2 seconds to `sampled_frames/` |
-| `live_vlm_qa.py` | Background capture + ask a VLM questions about recent frames in a REPL |
-| `whep_client.py` | Core WHEP/ICE logic (aiortc) |
-| `whep_worker.py` | Subprocess worker — streams frames to parent (no OpenCV in child) |
-| `whep_probe.py` | Diagnose WHEP OPTIONS/POST/ICE (`camera-whep-probe`) |
-| `mediamtx-tapo.example.yml` | Example MediaMTX config for Tapo → WebRTC/WHEP |
-| `mediamtx-phone.example.yml` | Example MediaMTX config for smartphone → WebRTC/WHEP |
+
+| File                         | Purpose                                                                |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `stream_config.py`           | Shared helpers: resolve camera preset from env or CLI, open capture    |
+| `preview_stream.py`          | Live preview only — no saving, no VLM                                  |
+| `frame_sample.py`            | Live preview + save a JPEG every 2 seconds to `sampled_frames/`        |
+| `live_vlm_qa.py`             | Background capture + ask a VLM questions about recent frames in a REPL |
+| `whep_client.py`             | Core WHEP/ICE logic (aiortc)                                           |
+| `whep_worker.py`             | Subprocess worker — streams frames to parent (no OpenCV in child)      |
+| `whep_probe.py`              | Diagnose WHEP OPTIONS/POST/ICE (`camera-whep-probe`)                   |
+| `mediamtx-tapo.example.yml`  | Example MediaMTX config for Tapo → WebRTC/WHEP                         |
+| `mediamtx-phone.example.yml` | Example MediaMTX config for smartphone → WebRTC/WHEP                   |
+
 
 ## Setup
 
@@ -57,15 +61,17 @@ uv run python live_vlm_qa.py
 
 Set these in `camera_test/.env` (see [.env.example](.env.example)):
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CAMERA_SOURCE` | `tapo-rtsp` | `tapo-rtsp`, `tapo-webrtc`, or `phone-webrtc` |
-| `RTSP_URL` | Tapo placeholder | Used when `CAMERA_SOURCE=tapo-rtsp` |
-| `RTSP_TRANSPORT` | `tcp` | `tcp` or `udp` for OpenCV/FFmpeg RTSP |
-| `WEBRTC_URL` | path-specific default | WHEP endpoint for WebRTC presets |
-| `WEBRTC_ICE_SERVERS` | `stun:stun.l.google.com:19302` | Optional comma-separated STUN/TURN URLs |
-| `WEBRTC_OPEN_TIMEOUT_SEC` | `30` | Seconds to wait for WHEP connect + first frame |
-| `WEBRTC_IPC` | `subprocess` | `subprocess` (default) runs aiortc in a child process; `inprocess` for debugging |
+
+| Variable                  | Default                        | Description                                                                      |
+| ------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| `CAMERA_SOURCE`           | `tapo-rtsp`                    | `tapo-rtsp`, `tapo-webrtc`, or `phone-webrtc`                                    |
+| `RTSP_URL`                | Tapo placeholder               | Used when `CAMERA_SOURCE=tapo-rtsp`                                              |
+| `RTSP_TRANSPORT`          | `tcp`                          | `tcp` or `udp` for OpenCV/FFmpeg RTSP                                            |
+| `WEBRTC_URL`              | path-specific default          | WHEP endpoint for WebRTC presets                                                 |
+| `WEBRTC_ICE_SERVERS`      | `stun:stun.l.google.com:19302` | Optional comma-separated STUN/TURN URLs                                          |
+| `WEBRTC_OPEN_TIMEOUT_SEC` | `30`                           | Seconds to wait for WHEP connect + first frame                                   |
+| `WEBRTC_IPC`              | `subprocess`                   | `subprocess` (default) runs aiortc in a child process; `inprocess` for debugging |
+
 
 CLI flags override env:
 
@@ -78,11 +84,9 @@ Before using `camera_test`, confirm RTSP works on your LAN:
 
 1. **Find the camera IP** in the Tapo app: **Device Settings → Network / Networking** (wording varies by model).
 2. **Create a Camera Account** (separate from your Tapo app login): **Device Settings → Advanced Settings → Camera Account**. Use that username and password with the IP from step 1 to build the RTSP URL:
-
-   ```text
+  ```text
    rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
-   ```
-
+  ```
 3. **Test in VLC** on your Mac: *Media → Open Network Stream…*, paste the URL, and confirm video plays.
 
 Then set `camera_test/.env`:
@@ -95,8 +99,7 @@ RTSP_TRANSPORT=tcp
 
 - `stream1` — higher quality
 - `stream2` — lower bandwidth (good default for sampling and VLM)
-- If the password contains special characters (`@`, `!`, `#`, …), URL-encode them (e.g. `!` → `%21`)
-- OpenCV reads Tapo RTSP best with **`RTSP_TRANSPORT=tcp`**
+- OpenCV reads Tapo RTSP best with `**RTSP_TRANSPORT=tcp**`
 
 ```bash
 uv run camera-preview --camera tapo-rtsp
@@ -113,8 +116,8 @@ Tapo cameras speak **RTSP**, not WebRTC. To use `CAMERA_SOURCE=tapo-webrtc`, run
 mediamtx /path/to/mediamtx-tapo.example.yml
 ```
 
-3. Open the browser player at `http://localhost:8889/tapo/` to verify.
-4. Point `camera_test` at the WHEP endpoint:
+1. Open the browser player at `http://localhost:8889/tapo/` to verify.
+2. Point `camera_test` at the WHEP endpoint:
 
 ```env
 CAMERA_SOURCE=tapo-webrtc
@@ -126,7 +129,7 @@ uv run camera-whep-probe --url http://localhost:8889/tapo/whep
 uv run camera-preview --camera tapo-webrtc
 ```
 
-Example config: [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml). For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no`. If the stream drops on Wi‑Fi, switch to `rtspTransport: tcp`.
+Example config: `[mediamtx-tapo.example.yml](mediamtx-tapo.example.yml)`. For lowest latency on the same LAN, prefer `rtspTransport: udp` and `sourceOnDemand: no`. If the stream drops on Wi‑Fi, switch to `rtspTransport: tcp`.
 
 For local Python on the same Wi‑Fi, **RTSP direct** (`tapo-rtsp`) is usually faster than RTSP → MediaMTX → WebRTC.
 
@@ -153,7 +156,7 @@ mkcert -key-file mediamtx-certs/server.key -cert-file mediamtx-certs/server.crt 
 
 Install the mkcert root CA on your phone too (mkcert prints how; on iOS: Settings → General → About → Certificate Trust Settings).
 
-[`mediamtx-phone.example.yml`](mediamtx-phone.example.yml) already points at those cert paths and sets `webrtcEncryption: yes`. Add your LAN IP under `webrtcAdditionalHosts`.
+`[mediamtx-phone.example.yml](mediamtx-phone.example.yml)` already points at those cert paths and sets `webrtcEncryption: yes`. Add your LAN IP under `webrtcAdditionalHosts`.
 
 #### Run
 
@@ -163,8 +166,8 @@ Install the mkcert root CA on your phone too (mkcert prints how; on iOS: Setting
 mediamtx /path/to/mediamtx-phone.example.yml
 ```
 
-2. Note your Mac's **LAN IP** (e.g. `192.168.1.100`). The phone must reach it on the **same Wi‑Fi**.
-3. On the phone, open (**https**, not http):
+1. Note your Mac's **LAN IP** (e.g. `192.168.1.100`). The phone must reach it on the **same Wi‑Fi**.
+2. On the phone, open (**https**, not http):
 
 ```text
 https://192.168.1.100:8889/phone/publish
@@ -191,12 +194,14 @@ uv run camera-whep-probe --url https://localhost:8889/phone/whep
 
 ### VLM settings (`live_vlm_qa.py` only)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VLM_PROVIDER` | `openai` | `openai` or `ollama` (local, no API key) |
-| `VLM_MODEL` | `gpt-5.5` | OpenAI model name, or Ollama model (e.g. `llava`) |
-| `OPENAI_API_KEY` | — | Required when `VLM_PROVIDER=openai` |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+
+| Variable          | Default                  | Description                                       |
+| ----------------- | ------------------------ | ------------------------------------------------- |
+| `VLM_PROVIDER`    | `openai`                 | `openai` or `ollama` (local, no API key)          |
+| `VLM_MODEL`       | `gpt-5.5`                | OpenAI model name, or Ollama model (e.g. `llava`) |
+| `OPENAI_API_KEY`  | —                        | Required when `VLM_PROVIDER=openai`               |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL                                 |
+
 
 ## Usage
 
@@ -214,7 +219,7 @@ uv run camera-preview \
   --url 'rtsp://camera_user:camera_pass@192.168.1.50:554/stream2'
 ```
 
-Press **`q`** in the preview window to quit.
+Press `**q**` in the preview window to quit.
 
 ### Sample frames to disk
 
@@ -224,7 +229,7 @@ Shows a live preview and saves one JPEG every 2 seconds under `camera_test/sampl
 uv run camera-sample
 ```
 
-Press **`q`** to stop. Output files: `frame_000000.jpg`, `frame_000001.jpg`, …
+Press `**q**` to stop. Output files: `frame_000000.jpg`, `frame_000001.jpg`, …
 
 ### Ask a VLM about the live view
 
@@ -234,18 +239,20 @@ Captures recent frames in the background (1 per second) and answers text questio
 uv run camera-vlm --camera tapo-rtsp
 ```
 
-Type **`q`**, **`quit`**, or **`exit`** to stop.
+Type `**q**`, `**quit**`, or `**exit**` to stop.
 
 ## Latency (RTSP vs WebRTC)
 
 A half-second to one second behind “real time” is **normal** when video goes through RTSP → MediaMTX → WebRTC. For local Python on the same Wi‑Fi, **Tapo RTSP direct** is usually the fastest option. Use WebRTC when you want a browser player, a phone as the camera, or multiple clients.
 
-| Path | Typical delay (same LAN) | Best for |
-|------|--------------------------|----------|
-| Tapo → RTSP → `camera_test` | ~200–500 ms | Local preview, VLM, frame sampling |
-| Tapo → RTSP → MediaMTX → WebRTC → `camera_test` | ~500 ms–1.5 s (tunable) | Browser preview, relay, WHEP clients |
-| Phone → MediaMTX → WebRTC → `camera_test` | ~300 ms–1 s | Wearable / phone-as-camera prototypes |
-| Phone → MediaMTX → **RTSP** → `camera_test` (current default) | ~0.5–2 s | Reliable Python preview; not true end-to-end WebRTC |
+
+| Path                                                          | Typical delay (same LAN) | Best for                                            |
+| ------------------------------------------------------------- | ------------------------ | --------------------------------------------------- |
+| Tapo → RTSP → `camera_test`                                   | ~200–500 ms              | Local preview, VLM, frame sampling                  |
+| Tapo → RTSP → MediaMTX → WebRTC → `camera_test`               | ~500 ms–1.5 s (tunable)  | Browser preview, relay, WHEP clients                |
+| Phone → MediaMTX → WebRTC → `camera_test`                     | ~300 ms–1 s              | Wearable / phone-as-camera prototypes               |
+| Phone → MediaMTX → **RTSP** → `camera_test` (current default) | ~0.5–2 s                 | Reliable Python preview; not true end-to-end WebRTC |
+
 
 **Why phone preview can feel slow or freeze:** Python reads MediaMTX over **RTSP**, not WebRTC (WHEP is unreliable with `webrtcEncryption` + aiortc). That adds a transcode/relay hop. OpenCV/FFmpeg also **buffers** frames — the picture can lag, then look frozen when the buffer stalls. `read_frame()` flushes stale frames; tune `RTSP_FLUSH_GRABS` and use `RTSP_TRANSPORT=udp` for local `127.0.0.1:8554`.
 
@@ -259,11 +266,11 @@ paths:
     rtspTransport: udp
 ```
 
-Use **`stream2`** unless you need full resolution.
+Use `**stream2**` unless you need full resolution.
 
 ## Troubleshooting
 
-**`Class AVFFrameReceiver is implemented in both ...` (macOS)**
+`**Class AVFFrameReceiver is implemented in both ...` (macOS)**
 
 OpenCV and aiortc each ship FFmpeg libraries. When both load in one process, macOS may print a harmless duplicate-class warning. WebRTC runs in a **child process** by default (`WEBRTC_IPC=subprocess`) to avoid crashes. If you see real crashes, avoid `WEBRTC_IPC=inprocess` or use `tapo-rtsp` for Python preview.
 
@@ -274,24 +281,26 @@ OpenCV and aiortc each ship FFmpeg libraries. When both load in one process, mac
 3. For Tapo, verify the Camera Account credentials (not your Tapo app password).
 4. Try `stream2` instead of `stream1`.
 
-**`path 'tapo' is not configured` (MediaMTX)**
+`**path 'tapo' is not configured` (MediaMTX)**
 
 MediaMTX is not loading the YAML file you edited. Start with an explicit path: `mediamtx /path/to/mediamtx.yml`.
 
-**`no stream is available on path` (WebRTC / WHEP)**
+`**no stream is available on path` (WebRTC / WHEP)**
 
-| Setup | `mediamtx.yml` | Browser test | Python URL |
-|-------|----------------|--------------|------------|
-| Tapo WebRTC | `tapo:` | `http://localhost:8889/tapo/` | `http://localhost:8889/tapo/whep` |
-| Phone WebRTC | `phone:` | `https://localhost:8889/phone/` | `rtsp://127.0.0.1:8554/phone` (RTSP relay) |
+
+| Setup        | `mediamtx.yml` | Browser test                    | Python URL                                 |
+| ------------ | -------------- | ------------------------------- | ------------------------------------------ |
+| Tapo WebRTC  | `tapo:`        | `http://localhost:8889/tapo/`   | `http://localhost:8889/tapo/whep`          |
+| Phone WebRTC | `phone:`       | `https://localhost:8889/phone/` | `rtsp://127.0.0.1:8554/phone` (RTSP relay) |
+
 
 **Tapo WebRTC:** ensure MediaMTX is pulling RTSP (`sourceOnDemand: no` or open the browser player once).
 
-**Phone WebRTC:** path **`phone`** has no stream until the phone is publishing at `https://YOUR_MAC_IP:8889/phone/publish`.
+**Phone WebRTC:** path `**phone`** has no stream until the phone is publishing at `https://YOUR_MAC_IP:8889/phone/publish`.
 
 **Phone publish page: "can't access webcams or microphones"**
 
-You opened `http://` from the phone, or `webrtcEncryption` is off / certs are missing. Browsers block camera access on insecure origins. Enable TLS in `mediamtx-phone.example.yml`, generate certs (see [Phone WebRTC TLS](#phone-webrtc-tls-one-time-setup)), restart MediaMTX, and use **`https://`** on the phone.
+You opened `http://` from the phone, or `webrtcEncryption` is off / certs are missing. Browsers block camera access on insecure origins. Enable TLS in `mediamtx-phone.example.yml`, generate certs (see [Phone WebRTC TLS](#phone-webrtc-tls-one-time-setup)), restart MediaMTX, and use `**https://`** on the phone.
 
 **Browser HTTPS works, but Python WHEP fails with `CERTIFICATE_VERIFY_FAILED`**
 
@@ -323,7 +332,7 @@ uv run camera-whep-probe --url http://localhost:8889/tapo/whep
 Checklist:
 
 1. `WEBRTC_URL` path matches `mediamtx.yml`.
-2. Copy [`mediamtx-tapo.example.yml`](mediamtx-tapo.example.yml) — set `webrtcAdditionalHosts: [127.0.0.1]` (and LAN IP if needed).
+2. Copy `[mediamtx-tapo.example.yml](mediamtx-tapo.example.yml)` — set `webrtcAdditionalHosts: [127.0.0.1]` (and LAN IP if needed).
 3. Increase timeout: `WEBRTC_OPEN_TIMEOUT_SEC=30`.
 
 **Probe stuck at `ice=checking`**
@@ -333,11 +342,11 @@ Add to `mediamtx.yml`:
 - `webrtcAdditionalHosts: [127.0.0.1]` (+ your Mac LAN IP)
 - `webrtcLocalTCPAddress: :8190`
 
-**`backend is generally available but can't be used to capture by name` (RTSP)**
+`**backend is generally available but can't be used to capture by name` (RTSP)**
 
 FFmpeg failed to open the RTSP stream — not an OpenCV backend issue. Use `CAMERA_SOURCE=tapo-rtsp`, `RTSP_TRANSPORT=tcp`, confirm the URL in VLC, and URL-encode special characters in the password.
 
-**`Failed to read frame` loops**
+`**Failed to read frame` loops**
 
 The camera may have dropped the connection. Stop with `q` and restart. For RTSP direct, TCP transport often helps.
 
@@ -355,7 +364,7 @@ Python is not receiving WebRTC directly — it reads `rtsp://127.0.0.1:8554/phon
 
 **H264 errors in terminal (`corrupted macroblock`, `Missing reference picture`)**
 
-Harmless FFmpeg warnings when joining mid-stream or after a brief phone/WebRTC glitch. They are **not VLM errors**. By default they go to **`camera_test/rtsp_decode.log`** (not the terminal). Set `RTSP_FFMPEG_LOG=off` to print them inline, or `RTSP_FFMPEG_LOG=/path/to/file.log` to customize. If the VLM keeps seeing stale scenes, the capture thread reconnects RTSP automatically; refresh the phone publish page if it keeps happening.
+Harmless FFmpeg warnings when joining mid-stream or after a brief phone/WebRTC glitch. They are **not VLM errors**. By default they go to `**camera_test/rtsp_decode.log`** (not the terminal). Set `RTSP_FFMPEG_LOG=off` to print them inline, or `RTSP_FFMPEG_LOG=/path/to/file.log` to customize. If the VLM keeps seeing stale scenes, the capture thread reconnects RTSP automatically; refresh the phone publish page if it keeps happening.
 
 ## Suggested workflow
 
@@ -369,3 +378,4 @@ For production-style flows (config, logging, memory), use the packages in the re
 
 - `vlm_smoke/` — stable live visual QA
 - `memory_log/` — structured visual memory to JSONL
+
