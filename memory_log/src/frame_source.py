@@ -19,9 +19,7 @@ OPEN_RETRY_SLEEP_SEC = 2.0
 
 
 def open_video_capture(source: str | int) -> cv2.VideoCapture:
-    if isinstance(source, str) and source.startswith(
-        ("rtmp://", "rtsp://", "http://", "https://")
-    ):
+    if isinstance(source, str):
         cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
     else:
         cap = cv2.VideoCapture(source)
@@ -200,26 +198,6 @@ class _ThreadedFrameSource(FrameSource):
         ...
 
 
-class RTMPFrameSource(_ThreadedFrameSource):
-    def __init__(self, rtmp_url: str, buffer_size: int, sample_interval_sec: float):
-        super().__init__(buffer_size, sample_interval_sec, "rtmp")
-        self.rtmp_url = rtmp_url
-
-    def _capture_loop(self) -> None:
-        logger.info("Opening RTMP stream: %s", self.rtmp_url)
-
-        def open_capture() -> cv2.VideoCapture:
-            return open_video_capture(self.rtmp_url)
-
-        self._capture_loop_with_opener(
-            open_capture,
-            open_failure_message=(
-                f"Could not open RTMP stream {self.rtmp_url}. Retrying in "
-                f"{OPEN_RETRY_SLEEP_SEC:.0f} seconds..."
-            ),
-        )
-
-
 class WebcamFrameSource(_ThreadedFrameSource):
     def __init__(
         self,
@@ -284,13 +262,6 @@ def create_frame_source(config: Config) -> FrameSource:
             camera=camera,
             source_type=source_type,
             target=target,
-            buffer_size=config.frame_buffer_size,
-            sample_interval_sec=config.capture_sample_interval_sec,
-        )
-
-    if config.frame_source_type == "rtmp":
-        return RTMPFrameSource(
-            rtmp_url=config.rtmp_url,
             buffer_size=config.frame_buffer_size,
             sample_interval_sec=config.capture_sample_interval_sec,
         )

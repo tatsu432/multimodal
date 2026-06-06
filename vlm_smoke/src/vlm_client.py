@@ -12,7 +12,6 @@ from src.utils import FrameItem, encode_frame_as_base64_jpeg
 logger = logging.getLogger("vlm_smoke.vlm")
 
 SOURCE_PROMPTS = {
-    "rtmp": "a live GoPro camera stream",
     "webcam": "a live webcam feed",
     "video": "a video recording",
     "tapo-rtsp": "a Tapo IP camera stream (RTSP)",

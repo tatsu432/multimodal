@@ -121,7 +121,7 @@ def main() -> None:
     configure_decode_logging()
 
     parser = argparse.ArgumentParser(
-        description="Live visual QA — GoPro/webcam/video or Tapo/phone cameras."
+        description="Live visual QA — camera, webcam, or video file."
     )
     add_source_args(parser)
     args = parser.parse_args()

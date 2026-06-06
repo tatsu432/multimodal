@@ -49,7 +49,7 @@ Point `MEMORY_JSONL_PATH` at Step 2 output (default: `../memory_log/outputs/memo
 | `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` and LLM answerer on |
 | `OLLAMA_BASE_URL` | Ollama URL when `LLM_PROVIDER=ollama` |
 
-**Live camera capture** is not in this step — run [`memory_log`](../memory_log/README.md) with `FRAME_SOURCE_TYPE=camera` to record memories from Tapo / phone / RTMP. This module only searches existing JSONL.
+**Live camera capture** is not in this step — run [`memory_log`](../memory_log/README.md) with `FRAME_SOURCE_TYPE=camera` to record memories from Tapo / phone cameras. This module only searches existing JSONL.
 
 ## Run
 

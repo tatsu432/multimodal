@@ -206,7 +206,7 @@ def main() -> None:
     configure_decode_logging()
 
     parser = argparse.ArgumentParser(
-        description="Visual memory logging — GoPro/webcam/video or Tapo/phone cameras."
+        description="Visual memory logging — camera, webcam, or video file."
     )
     add_source_args(parser)
     args = parser.parse_args()

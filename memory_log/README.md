@@ -36,10 +36,9 @@ uv sync
 
 | Variable | Description |
 |----------|-------------|
-| `FRAME_SOURCE_TYPE` | `camera`, `rtmp`, `webcam`, or `video` |
+| `FRAME_SOURCE_TYPE` | `camera`, `webcam`, or `video` |
 | `CAMERA_SOURCE` | When `camera`: `tapo-rtsp`, `tapo-webrtc`, `phone-webrtc` |
 | `RTSP_URL`, `PHONE_STREAM_URL`, `RTSP_*` | Same as [`camera_test`](../camera_test/README.md) |
-| `RTMP_URL` | RTMP stream URL |
 | `WEBCAM_INDEX` | Webcam device index (default `0`) |
 | `VIDEO_PATH` | Required when `FRAME_SOURCE_TYPE=video` |
 | `VLM_PROVIDER` | `openai` or `ollama` |
@@ -131,13 +130,6 @@ uv run python -m src.main
 ```
 
 Wait a few seconds for the capture buffer to fill, then type a question. Type `q` to quit.
-
-### RTMP
-
-```bash
-FRAME_SOURCE_TYPE=rtmp
-RTMP_URL=rtmp://localhost:1935/live/gopro
-```
 
 ### Webcam
 

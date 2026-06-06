@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from src.utils import parse_bool_env
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "rtmp", "webcam", "video"})
+VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 
 
@@ -17,7 +17,6 @@ class Config:
     camera_source: str
     camera_preset_override: str | None
     camera_url_override: str | None
-    rtmp_url: str
     webcam_index: int
     video_path: str
     vlm_provider: str
@@ -28,13 +27,12 @@ class Config:
     num_frames_per_query: int
     save_queried_frames: bool
     frame_buffer_size: int
-    rtmp_sample_interval_sec: float
+    capture_sample_interval_sec: float
 
     @classmethod
     def from_env(cls) -> "Config":
         load_dotenv(PROJECT_ROOT / ".env")
 
-        frame_source_type = os.getenv("FRAME_SOURCE_TYPE", "rtmp").strip().lower()
         frame_sample_dir = Path(
             os.getenv("FRAME_SAMPLE_DIR", "outputs/sampled_frames")
         )
@@ -42,11 +40,12 @@ class Config:
             frame_sample_dir = PROJECT_ROOT / frame_sample_dir
 
         return cls(
-            frame_source_type=frame_source_type,
+            frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "camera")
+            .strip()
+            .lower(),
             camera_source=os.getenv("CAMERA_SOURCE", "tapo-rtsp").strip().lower(),
             camera_preset_override=None,
             camera_url_override=None,
-            rtmp_url=os.getenv("RTMP_URL", "rtmp://localhost:1935/live/gopro"),
             webcam_index=int(os.getenv("WEBCAM_INDEX", "0")),
             video_path=os.getenv("VIDEO_PATH", "").strip(),
             vlm_provider=os.getenv("VLM_PROVIDER", "openai").strip().lower(),
@@ -61,8 +60,8 @@ class Config:
                 os.getenv("SAVE_QUERIED_FRAMES", "true")
             ),
             frame_buffer_size=int(os.getenv("FRAME_BUFFER_SIZE", "8")),
-            rtmp_sample_interval_sec=float(
-                os.getenv("RTMP_SAMPLE_INTERVAL_SEC", "1.0")
+            capture_sample_interval_sec=float(
+                os.getenv("CAPTURE_SAMPLE_INTERVAL_SEC", "1.0")
             ),
         )
 
@@ -113,8 +112,8 @@ class Config:
         if self.frame_buffer_size < 1:
             raise ValueError("FRAME_BUFFER_SIZE must be at least 1")
 
-        if self.rtmp_sample_interval_sec <= 0:
-            raise ValueError("RTMP_SAMPLE_INTERVAL_SEC must be positive")
+        if self.capture_sample_interval_sec <= 0:
+            raise ValueError("CAPTURE_SAMPLE_INTERVAL_SEC must be positive")
 
     @property
     def vlm_source_key(self) -> str:

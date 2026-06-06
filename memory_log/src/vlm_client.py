@@ -33,7 +33,6 @@ Guidelines:
 - Return JSON only. No markdown. No explanation."""
 
 SOURCE_PROMPTS = {
-    "rtmp": "a live GoPro camera stream",
     "webcam": "a live webcam feed",
     "video": "a video recording",
     "tapo-rtsp": "a Tapo IP camera stream (RTSP)",

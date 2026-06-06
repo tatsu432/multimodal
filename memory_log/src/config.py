@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from src.utils import parse_bool_env, parse_optional_float_env
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "rtmp", "webcam", "video"})
+VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 
 
@@ -17,7 +17,6 @@ class Config:
     camera_source: str
     camera_preset_override: str | None
     camera_url_override: str | None
-    rtmp_url: str
     webcam_index: int
     video_path: str
     vlm_provider: str
@@ -53,13 +52,12 @@ class Config:
         location_label = location_raw if location_raw else None
 
         return cls(
-            frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "rtmp")
+            frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "camera")
             .strip()
             .lower(),
             camera_source=os.getenv("CAMERA_SOURCE", "tapo-rtsp").strip().lower(),
             camera_preset_override=None,
             camera_url_override=None,
-            rtmp_url=os.getenv("RTMP_URL", "rtmp://localhost:1935/live/gopro"),
             webcam_index=int(os.getenv("WEBCAM_INDEX", "0")),
             video_path=os.getenv("VIDEO_PATH", "").strip(),
             vlm_provider=os.getenv("VLM_PROVIDER", "openai").strip().lower(),

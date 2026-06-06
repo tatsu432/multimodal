@@ -1,6 +1,6 @@
 # vlm_smoke — Phase 1: Live Visual QA
 
-Phase 1 of the wearable multimodal AI assistant project. This module stabilizes the live visual question-answering loop: capture frames from **Tapo / phone cameras**, RTMP, webcam, or a video file, then ask a vision-language model (VLM) questions in the terminal.
+Phase 1 of the wearable multimodal AI assistant project. This module stabilizes the live visual question-answering loop: capture frames from **Tapo / phone cameras**, webcam, or a video file, then ask a vision-language model (VLM) questions in the terminal.
 
 ## What this phase does
 
@@ -16,8 +16,6 @@ Phase 1 of the wearable multimodal AI assistant project. This module stabilizes 
 - Python 3.12+
 - OpenAI API key **or** [Ollama](https://ollama.com) with a vision model (`ollama pull llava`)
 - For **camera** sources: same `.env` presets as [`camera_test/`](../camera_test/README.md) (`tapo-rtsp`, `phone-webrtc`, etc.)
-- For RTMP: GoPro (or other camera) streaming to a local RTMP relay (e.g. `rtmp://localhost:1935/live/gopro`)
-- OpenCV with FFmpeg support (included via `opencv-python`) for RTMP
 
 ## Setup
 
@@ -32,12 +30,11 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `FRAME_SOURCE_TYPE` | `camera`, `rtmp`, `webcam`, or `video` | `camera` |
+| `FRAME_SOURCE_TYPE` | `camera`, `webcam`, or `video` | `camera` |
 | `CAMERA_SOURCE` | When `camera`: `tapo-rtsp`, `tapo-webrtc`, `phone-webrtc` | `tapo-rtsp` |
 | `RTSP_URL` | Tapo RTSP URL (when `CAMERA_SOURCE=tapo-rtsp`) | see `.env.example` |
 | `PHONE_STREAM_URL` | MediaMTX RTSP relay (when `CAMERA_SOURCE=phone-webrtc`) | `rtsp://127.0.0.1:8554/phone` |
 | `RTSP_TRANSPORT`, `RTSP_LOW_LATENCY`, `RTSP_FLUSH_GRABS` | RTSP tuning (same as `camera_test`) | — |
-| `RTMP_URL` | RTMP stream URL | `rtmp://localhost:1935/live/gopro` |
 | `WEBCAM_INDEX` | Webcam device index | `0` |
 | `VIDEO_PATH` | Path to video file (required for `video`) | — |
 | `VLM_PROVIDER` | `openai` or `ollama` | `openai` |
@@ -48,7 +45,7 @@ cp .env.example .env
 | `NUM_FRAMES_PER_QUERY` | Frames sent per question | `1` |
 | `SAVE_QUERIED_FRAMES` | Save frames on each query (`true`/`false`) | `true` |
 | `FRAME_BUFFER_SIZE` | Ring buffer capacity | `8` |
-| `RTMP_SAMPLE_INTERVAL_SEC` | Seconds between buffered samples | `1.0` |
+| `CAPTURE_SAMPLE_INTERVAL_SEC` | Seconds between buffered samples | `1.0` |
 
 See [.env.example](.env.example) for a full template.
 
@@ -226,16 +223,6 @@ CLI overrides (when `FRAME_SOURCE_TYPE=camera`):
 uv run python -m src.main --camera phone-webrtc --url rtsp://127.0.0.1:8554/phone
 ```
 
-### RTMP (GoPro live stream)
-
-```bash
-# .env
-FRAME_SOURCE_TYPE=rtmp
-RTMP_URL=rtmp://localhost:1935/live/gopro
-```
-
-Start your RTMP relay and GoPro stream first, then run the app. Wait a few seconds for the frame buffer to fill before asking questions.
-
 ### Webcam
 
 ```bash
@@ -294,10 +281,10 @@ Tune `NUM_FRAMES_PER_QUERY` (default `1`) and `FRAME_BUFFER_SIZE` for multi-fram
 
 - **Blocking REPL**: The main thread waits for keyboard input; capture runs in a background thread.
 - **No preview window**: Headless-friendly; no `cv2.imshow` in this module.
-- **RTMP startup delay**: You may need to wait a few seconds after launch before frames appear in the buffer.
-- **RTMP reconnects**: Brief read stalls are retried before reconnecting; sustained failures still reconnect. If your relay stops when the last viewer disconnects, avoid running a second RTMP client (e.g. `camera_test/preview_stream.py`) at the same time.
+- **Buffer warmup**: Wait a few seconds after launch before frames appear in the buffer.
+- **Stream reconnects**: Brief read stalls are retried before reconnecting; sustained failures reconnect automatically.
 - **API cost and latency**: Each question triggers a VLM API call; latency is logged but not optimized.
-- **Coarse sampling**: Frames are sampled at `RTMP_SAMPLE_INTERVAL_SEC` (default 1 Hz), not every video frame.
+- **Coarse sampling**: Frames are sampled at `CAPTURE_SAMPLE_INTERVAL_SEC` (default 1 Hz), not every video frame.
 
 ## Out of scope for Phase 1
 
@@ -325,7 +312,7 @@ vlm_smoke/
 ├── src/
 │   ├── main.py          # REPL entrypoint
 │   ├── config.py        # Environment configuration
-│   ├── frame_source.py  # RTMP / webcam / video capture
+│   ├── frame_source.py  # camera / webcam / video capture
 │   ├── vlm_client.py    # OpenAI VLM wrapper
 │   └── utils.py         # Buffer, encoding, frame saving
 └── outputs/

@@ -107,7 +107,7 @@ def save_query_frames(
 
     for index, frame in enumerate(frames, start=1):
         path = directory / f"query_{timestamp}_{index:03d}.jpg"
-        # Save a downscaled copy so disk I/O does not block RTMP capture on huge frames.
+        # Save a downscaled copy so disk I/O does not block capture on huge frames.
         ok = cv2.imwrite(str(path), resize_frame(frame, max_width=max_width))
         if not ok:
             raise RuntimeError(f"Failed to save frame to {path}")
