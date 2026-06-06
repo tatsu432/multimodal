@@ -11,6 +11,21 @@ VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 
 
+def _optional_label(value: str) -> str | None:
+    stripped = value.strip()
+    return stripped if stripped else None
+
+
+def _optional_path(value: str) -> Path | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    path = Path(stripped)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
 @dataclass
 class Config:
     frame_source_type: str
@@ -29,6 +44,20 @@ class Config:
     output_frame_dir: Path
     memory_jsonl_path: Path
     location_label: str | None
+    location_lat: float | None
+    location_lon: float | None
+    tapo_location_label: str | None
+    tapo_location_lat: float | None
+    tapo_location_lon: float | None
+    phone_location_label: str | None
+    phone_location_lat: float | None
+    phone_location_lon: float | None
+    location_server_enabled: bool
+    location_server_host: str
+    location_server_port: int
+    location_server_cert: Path | None
+    location_server_key: Path | None
+    location_gps_max_age_sec: float
     save_frames: bool
     max_runtime_seconds: float | None
 
@@ -47,9 +76,6 @@ class Config:
         )
         if not memory_jsonl_path.is_absolute():
             memory_jsonl_path = PROJECT_ROOT / memory_jsonl_path
-
-        location_raw = os.getenv("LOCATION_LABEL", "").strip()
-        location_label = location_raw if location_raw else None
 
         return cls(
             frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "camera")
@@ -73,7 +99,39 @@ class Config:
             num_frames_per_query=int(os.getenv("NUM_FRAMES_PER_QUERY", "1")),
             output_frame_dir=output_frame_dir,
             memory_jsonl_path=memory_jsonl_path,
-            location_label=location_label,
+            location_label=_optional_label(os.getenv("LOCATION_LABEL", "")),
+            location_lat=parse_optional_float_env(os.getenv("LOCATION_LAT", "")),
+            location_lon=parse_optional_float_env(os.getenv("LOCATION_LON", "")),
+            tapo_location_label=_optional_label(os.getenv("TAPO_LOCATION_LABEL", "")),
+            tapo_location_lat=parse_optional_float_env(
+                os.getenv("TAPO_LOCATION_LAT", "")
+            ),
+            tapo_location_lon=parse_optional_float_env(
+                os.getenv("TAPO_LOCATION_LON", "")
+            ),
+            phone_location_label=_optional_label(
+                os.getenv("PHONE_LOCATION_LABEL", "")
+            ),
+            phone_location_lat=parse_optional_float_env(
+                os.getenv("PHONE_LOCATION_LAT", "")
+            ),
+            phone_location_lon=parse_optional_float_env(
+                os.getenv("PHONE_LOCATION_LON", "")
+            ),
+            location_server_enabled=parse_bool_env(
+                os.getenv("LOCATION_SERVER_ENABLED", "false")
+            ),
+            location_server_host=os.getenv("LOCATION_SERVER_HOST", "0.0.0.0").strip(),
+            location_server_port=int(os.getenv("LOCATION_SERVER_PORT", "8765")),
+            location_server_cert=_optional_path(
+                os.getenv("LOCATION_SERVER_CERT", "")
+            ),
+            location_server_key=_optional_path(
+                os.getenv("LOCATION_SERVER_KEY", "")
+            ),
+            location_gps_max_age_sec=float(
+                os.getenv("LOCATION_GPS_MAX_AGE_SEC", "120")
+            ),
             save_frames=parse_bool_env(os.getenv("SAVE_FRAMES", "true")),
             max_runtime_seconds=parse_optional_float_env(
                 os.getenv("MAX_RUNTIME_SECONDS", "")
@@ -136,8 +194,26 @@ class Config:
         ):
             raise ValueError("MAX_RUNTIME_SECONDS must be positive when set")
 
+        if self.location_server_enabled:
+            if self.location_server_port < 1 or self.location_server_port > 65535:
+                raise ValueError("LOCATION_SERVER_PORT must be between 1 and 65535")
+            if self.location_gps_max_age_sec <= 0:
+                raise ValueError("LOCATION_GPS_MAX_AGE_SEC must be positive")
+            if self.location_server_cert and not self.location_server_cert.is_file():
+                raise ValueError(
+                    f"LOCATION_SERVER_CERT not found: {self.location_server_cert}"
+                )
+            if self.location_server_key and not self.location_server_key.is_file():
+                raise ValueError(
+                    f"LOCATION_SERVER_KEY not found: {self.location_server_key}"
+                )
+
     @property
     def vlm_source_key(self) -> str:
         if self.frame_source_type == "camera":
             return self.camera_preset_override or self.camera_source
         return self.frame_source_type
+
+    @property
+    def camera_source_key(self) -> str:
+        return self.vlm_source_key

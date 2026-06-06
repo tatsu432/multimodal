@@ -261,6 +261,30 @@ Optional WHEP probe (often fails with `webrtcEncryption` + aiortc — see Troubl
 uv run camera-whep-probe --url https://localhost:8889/phone/whep
 ```
 
+#### Phone GPS sidecar for memory_log
+
+When using [`memory_log`](../memory_log/) with `CAMERA_SOURCE=phone-webrtc`, you can attach live GPS without a VLM call:
+
+1. Generate TLS certs (same mkcert step as above) if you have not already.
+2. In `memory_log/.env`:
+
+```env
+LOCATION_SERVER_ENABLED=true
+LOCATION_SERVER_PORT=8765
+LOCATION_SERVER_CERT=../camera_test/mediamtx-certs/server.crt
+LOCATION_SERVER_KEY=../camera_test/mediamtx-certs/server.key
+PHONE_LOCATION_LABEL=walking
+```
+
+3. Start `memory_log` (`uv run python -m src.main` from `memory_log/`).
+4. On the phone, while publishing at `https://YOUR_MAC_IP:8889/phone/publish`, also open:
+
+```text
+https://YOUR_MAC_IP:8765/
+```
+
+The page at [`phone_location.html`](phone_location.html) uses the browser Geolocation API and POSTs lat/lon to memory_log. Keep it open in a background tab. Each saved memory then gets `location.source=phone_gps` when a fix is fresh (default max age 120s).
+
 ### VLM settings (`camera-vlm` only)
 
 Switch between cloud OpenAI and local Ollama in `.env`:

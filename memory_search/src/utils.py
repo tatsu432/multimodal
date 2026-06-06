@@ -34,9 +34,15 @@ def parse_record_timestamp(
 
 def resolve_image_path(image_path: str, memory_base_dir: Path) -> Path:
     path = Path(image_path)
+    if not image_path:
+        return memory_base_dir / "_missing_.jpg"
     if path.is_absolute():
         return path
     return memory_base_dir / path
+
+
+def resolve_record_image_path(record, memory_base_dir: Path) -> Path:
+    return resolve_image_path(record.primary_image_path(), memory_base_dir)
 
 
 def format_timestamp_display(dt: datetime | None, fallback: str = "") -> str:

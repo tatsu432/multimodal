@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory_log phone location</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; line-height: 1.5; }
+    .ok { color: #0a0; }
+    .err { color: #a00; }
+    code { background: #f4f4f4; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Phone GPS for memory_log</h1>
+  <p>Keep this page open while you publish from your phone and ask questions in memory_log.</p>
+  <p id="status">Requesting location permission…</p>
+  <p id="coords"></p>
+  <script>
+    const statusEl = document.getElementById("status");
+    const coordsEl = document.getElementById("coords");
+
+    async function postLocation(position) {
+      const payload = {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+      const response = await fetch("/location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error("POST /location failed: " + response.status);
+      }
+      statusEl.className = "ok";
+      statusEl.textContent = "Location sent to memory_log.";
+      coordsEl.textContent =
+        payload.lat.toFixed(6) + ", " + payload.lon.toFixed(6) +
+        " (±" + Math.round(payload.accuracy) + " m)";
+    }
+
+    if (!navigator.geolocation) {
+      statusEl.className = "err";
+      statusEl.textContent = "Geolocation is not supported in this browser.";
+    } else {
+      navigator.geolocation.watchPosition(
+        (position) => {
+          postLocation(position).catch((err) => {
+            statusEl.className = "err";
+            statusEl.textContent = "Failed to send location: " + err.message;
+          });
+        },
+        (err) => {
+          statusEl.className = "err";
+          statusEl.textContent = "Geolocation error: " + err.message;
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      );
+    }
+  </script>
+</body>
+</html>

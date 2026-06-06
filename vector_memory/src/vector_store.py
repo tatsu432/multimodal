@@ -156,7 +156,7 @@ def _record_metadata(item: LoadedMemory) -> dict[str, str | int | float | bool]:
     return {
         "memory_id": record.memory_id,
         "timestamp": record.timestamp,
-        "image_path": record.image_path,
+        "image_path": record.primary_image_path(),
         "scene_type": record.scene_type,
         "objects_text": objects_text,
         "text_visible_text": text_visible_text,

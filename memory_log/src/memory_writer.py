@@ -6,7 +6,13 @@ import numpy as np
 
 from src.config import PROJECT_ROOT, Config
 from src.schema import LocationInfo, MemoryRecord
-from src.utils import make_memory_id, relative_path, save_frame_image
+from src.utils import (
+    FrameItem,
+    frame_capture_timestamp_iso,
+    make_memory_id,
+    relative_path,
+    save_frame_image,
+)
 
 logger = logging.getLogger("memory_log.writer")
 
@@ -26,65 +32,58 @@ class MemoryWriter:
 
     def save_memory(
         self,
-        frame: np.ndarray,
-        analysis: dict,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None,
         user_question: str,
+        model_answer: str,
+        location: LocationInfo,
+        camera_source: str | None,
     ) -> MemoryRecord:
         memory_id, timestamp, _ = make_memory_id()
 
-        image_path = ""
-        if self.config.save_frames and analysis["should_store"]:
-            saved = save_frame_image(
-                frame,
-                self.output_frame_dir,
-                memory_id,
-            )
-            image_path = relative_path(saved, PROJECT_ROOT)
-        elif analysis["should_store"]:
-            image_path = relative_path(
-                self.output_frame_dir / f"{memory_id}.jpg",
-                PROJECT_ROOT,
-            )
+        frame_paths: list[str] = []
+        frame_timestamps: list[str] = []
 
-        location = LocationInfo(
-            label=self.config.location_label,
-            lat=None,
-            lon=None,
-            source=(
-                "manual"
-                if self.config.location_label
-                else "manual_or_not_available"
-            ),
-        )
+        for index, frame in enumerate(frames):
+            suffix = f"_f{index + 1:02d}" if len(frames) > 1 else ""
+            if self.config.save_frames:
+                saved = save_frame_image(
+                    frame,
+                    self.output_frame_dir,
+                    memory_id,
+                    suffix=suffix,
+                )
+                frame_paths.append(relative_path(saved, PROJECT_ROOT))
+            else:
+                frame_paths.append(
+                    relative_path(
+                        self.output_frame_dir / f"{memory_id}{suffix}.jpg",
+                        PROJECT_ROOT,
+                    )
+                )
+
+            if frame_items and index < len(frame_items):
+                frame_timestamps.append(
+                    frame_capture_timestamp_iso(frame_items[index].timestamp)
+                )
 
         record = MemoryRecord(
             memory_id=memory_id,
             timestamp=timestamp,
-            image_path=image_path,
             user_question=user_question,
-            summary=analysis["summary"],
-            objects=analysis["objects"],
-            scene_type=analysis["scene_type"],
-            people_count=analysis["people_count"],
-            text_visible=analysis["text_visible"],
+            model_answer=model_answer,
+            frame_paths=frame_paths,
+            frame_timestamps=frame_timestamps,
             location=location,
-            should_store=analysis["should_store"],
-            memory_reason=analysis["memory_reason"],
-            privacy_risk=analysis["privacy_risk"],
+            camera_source=camera_source,
         )
 
-        if record.should_store:
-            self._append_jsonl(record)
-        else:
-            logger.info(
-                "Skipped JSONL append for %s (should_store=false)", record.memory_id
-            )
-
+        self._append_jsonl(record)
         return record
 
     def _append_jsonl(self, record: MemoryRecord) -> None:
         line = json.dumps(
-            record.model_dump(),
+            record.model_dump(exclude_defaults=True),
             ensure_ascii=False,
         )
         with self.memory_jsonl_path.open("a", encoding="utf-8") as fh:

@@ -38,9 +38,15 @@ def parse_record_timestamp(
 
 def resolve_image_path(image_path: str, memory_base_dir: Path) -> Path:
     path = Path(image_path)
+    if not image_path:
+        return memory_base_dir / "_missing_.jpg"
     if path.is_absolute():
         return path
     return memory_base_dir / path
+
+
+def resolve_record_image_path(record: MemoryRecord, memory_base_dir: Path) -> Path:
+    return resolve_image_path(record.primary_image_path(), memory_base_dir)
 
 
 def format_timestamp_display(dt: datetime | None, fallback: str = "") -> str:
@@ -54,18 +60,24 @@ def format_objects(objects: list[str]) -> str:
 
 
 def memory_to_embedding_text(memory: MemoryRecord) -> str:
-    objects_str = ", ".join(memory.objects) if memory.objects else "none"
-    text_visible_str = (
-        ", ".join(memory.text_visible) if memory.text_visible else "none"
-    )
     location_label = memory.location.label or "not available"
+    parts = [
+        f"Question: {memory.user_question}",
+        f"Answer: {memory.model_answer or memory.summary or 'not available'}",
+        f"Location: {location_label}.",
+    ]
 
-    return (
-        f"Summary: {memory.summary}\n"
-        f"Objects: {objects_str}.\n"
-        f"Scene type: {memory.scene_type}.\n"
-        f"Visible text: {text_visible_str}.\n"
-        f"Location: {location_label}.\n"
-        f"Privacy risk: {memory.privacy_risk}.\n"
-        f"Reason: {memory.memory_reason}"
-    )
+    if memory.summary and memory.summary != memory.model_answer:
+        parts.append(f"Summary: {memory.summary}")
+    if memory.objects:
+        parts.append(f"Objects: {', '.join(memory.objects)}.")
+    if memory.scene_type:
+        parts.append(f"Scene type: {memory.scene_type}.")
+    if memory.text_visible:
+        parts.append(f"Visible text: {', '.join(memory.text_visible)}.")
+    if memory.privacy_risk:
+        parts.append(f"Privacy risk: {memory.privacy_risk}.")
+    if memory.memory_reason:
+        parts.append(f"Reason: {memory.memory_reason}")
+
+    return "\n".join(parts)

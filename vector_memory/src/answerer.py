@@ -7,7 +7,11 @@ from providers.ollama import chat as ollama_chat
 
 from src.config import PROJECT_ROOT, Config
 from src.schema import ParsedMemoryQuery, ScoredMemory
-from src.utils import format_objects, format_timestamp_display, resolve_image_path
+from src.utils import (
+    format_objects,
+    format_timestamp_display,
+    resolve_record_image_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,23 +88,30 @@ def _format_evidence_block(
             fallback=record.timestamp[:19] if len(record.timestamp) >= 19 else record.timestamp,
         )
 
-        image_path = resolve_image_path(record.image_path, config.memory_base_dir)
+        image_path = resolve_record_image_path(record, config.memory_base_dir)
         try:
             display_image = str(image_path.relative_to(PROJECT_ROOT))
         except ValueError:
             display_image = item.display_image_path
 
         image_suffix = ""
-        if not image_path.is_file():
+        if record.primary_image_path() and not image_path.is_file():
             image_suffix = " (image not found)"
 
-        lines.append(f"{index}. {ts_display} — {record.summary}")
-        lines.append(f"   Objects: {format_objects(record.objects)}")
-        lines.append(f"   Scene: {record.scene_type}")
-        lines.append(f"   Privacy: {record.privacy_risk}")
-        if record.text_visible:
-            lines.append(f"   Text: {format_objects(record.text_visible)}")
-        lines.append(f"   Image: {display_image}{image_suffix}")
+        lines.append(f"{index}. {ts_display} — {record.display_text()}")
+        lines.append(f"   Question: {record.user_question}")
+        if record.objects:
+            lines.append(f"   Objects: {format_objects(record.objects)}")
+        if record.scene_type:
+            lines.append(f"   Scene: {record.scene_type}")
+        if record.location.label:
+            lines.append(f"   Location: {record.location.label}")
+        if record.frame_paths:
+            lines.append(
+                f"   Frames: {len(record.frame_paths)} ({display_image}{image_suffix})"
+            )
+        elif record.primary_image_path():
+            lines.append(f"   Image: {display_image}{image_suffix}")
         lines.append(_format_retrieval_line(item.retrieval_hints))
 
     return "\n".join(lines)
@@ -120,11 +131,15 @@ def _llm_summarize(
                     item.parsed_timestamp,
                     fallback=record.timestamp,
                 ),
+                "user_question": record.user_question,
+                "model_answer": record.model_answer,
                 "summary": record.summary,
                 "objects": record.objects,
                 "scene_type": record.scene_type,
                 "text_visible": record.text_visible,
                 "privacy_risk": record.privacy_risk,
+                "location": record.location.model_dump(),
+                "frame_paths": record.frame_paths,
                 "image_path": item.display_image_path,
             }
         )

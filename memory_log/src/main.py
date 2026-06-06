@@ -10,6 +10,8 @@ from providers.ollama import OllamaError, ensure_model
 
 from src.config import Config
 from src.frame_source import FrameSource, create_frame_source
+from src.location import LocationSidecarStore, resolve_location
+from src.location_server import LocationServer
 from src.memory_writer import MemoryWriter
 from src.vlm_client import VLMClient, create_vlm_client
 
@@ -32,7 +34,6 @@ class RunStats:
     questions_asked: int = 0
     memories_written: int = 0
     vlm_failures: int = 0
-    json_parse_failures: int = 0
     question_latencies: list[float] = field(default_factory=list)
 
     @property
@@ -42,8 +43,12 @@ class RunStats:
         return sum(self.question_latencies) / len(self.question_latencies)
 
 
-def _format_objects(objects: list[str]) -> str:
-    return ",".join(objects) if objects else "-"
+def _format_location_label(location) -> str:
+    if location.label:
+        return location.label
+    if location.lat is not None and location.lon is not None:
+        return f"{location.lat:.5f},{location.lon:.5f}"
+    return "-"
 
 
 def _log_memory_line(record, latency_sec: float) -> None:
@@ -53,10 +58,9 @@ def _log_memory_line(record, latency_sec: float) -> None:
 
     print(
         f"[{ts_short}] "
-        f"stored={str(record.should_store).lower()} "
-        f"privacy={record.privacy_risk} "
-        f"scene={record.scene_type} "
-        f"objects={_format_objects(record.objects)} "
+        f"frames={len(record.frame_paths)} "
+        f"location={_format_location_label(record.location)} "
+        f"source={record.location.source} "
         f"latency={latency_sec:.2f}s"
     )
 
@@ -66,6 +70,7 @@ def _handle_question(
     source: FrameSource,
     vlm: VLMClient,
     writer: MemoryWriter,
+    sidecar: LocationSidecarStore | None,
     question: str,
     stats: RunStats,
 ) -> None:
@@ -103,40 +108,32 @@ def _handle_question(
         print(f"\nAssistant: Unexpected error — {exc}\n")
         return
 
-    print(f"\nAssistant: {answer}\n")
-
-    try:
-        analysis = vlm.analyze_frame_for_memory(frames[-1])
-    except (OpenAIError, OllamaError) as exc:
-        stats.vlm_failures += 1
-        logger.error("VLM memory error: %s", exc)
-        print(f"Memory: VLM error — {exc}\n")
-        return
-    except Exception as exc:
-        stats.vlm_failures += 1
-        logger.exception("Unexpected VLM memory error: %s", exc)
-        print(f"Memory: Unexpected error — {exc}\n")
-        return
-
     latency_sec = time.perf_counter() - question_start
     stats.question_latencies.append(latency_sec)
 
-    if analysis is None:
-        stats.json_parse_failures += 1
-        logger.warning("Skipping memory: invalid or unparseable VLM JSON")
-        print("Memory: skipped (could not parse structured response)\n")
-        return
+    print(f"\nAssistant: {answer}\n")
+
+    location = resolve_location(
+        config,
+        sidecar,
+        config.camera_source_key,
+    )
 
     try:
-        record = writer.save_memory(frames[-1], analysis, user_question=question)
+        record = writer.save_memory(
+            frames=frames,
+            frame_items=frame_items,
+            user_question=question,
+            model_answer=answer,
+            location=location,
+            camera_source=config.camera_source_key,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         logger.error("Failed to save memory: %s", exc)
         print(f"Memory: save error — {exc}\n")
         return
 
-    if record.should_store:
-        stats.memories_written += 1
-
+    stats.memories_written += 1
     _log_memory_line(record, latency_sec)
 
 
@@ -145,6 +142,7 @@ def run_repl(
     source: FrameSource,
     vlm: VLMClient,
     writer: MemoryWriter,
+    sidecar: LocationSidecarStore | None,
 ) -> RunStats:
     stats = RunStats()
     start_time = time.monotonic()
@@ -179,7 +177,9 @@ def run_repl(
             break
 
         try:
-            _handle_question(config, source, vlm, writer, question, stats)
+            _handle_question(
+                config, source, vlm, writer, sidecar, question, stats
+            )
         except Exception as exc:
             logger.exception("Error handling question: %s", exc)
             print(f"\nError: {exc}\n")
@@ -192,7 +192,6 @@ def print_run_summary(stats: RunStats) -> None:
     print(f"- questions_asked: {stats.questions_asked}")
     print(f"- memories_written: {stats.memories_written}")
     print(f"- vlm_failures: {stats.vlm_failures}")
-    print(f"- json_parse_failures: {stats.json_parse_failures}")
     print(
         f"- average_vlm_latency_seconds: {stats.average_vlm_latency_seconds:.2f}"
     )
@@ -230,6 +229,19 @@ def main() -> None:
             logger.error("%s", exc)
             sys.exit(1)
 
+    sidecar: LocationSidecarStore | None = None
+    location_server: LocationServer | None = None
+    if config.location_server_enabled:
+        sidecar = LocationSidecarStore(max_age_sec=config.location_gps_max_age_sec)
+        location_server = LocationServer(
+            store=sidecar,
+            host=config.location_server_host,
+            port=config.location_server_port,
+            cert_path=config.location_server_cert,
+            key_path=config.location_server_key,
+        )
+        location_server.start()
+
     source = create_frame_source(config)
     vlm = create_vlm_client(config)
     writer = MemoryWriter(config)
@@ -237,13 +249,15 @@ def main() -> None:
     stats = RunStats()
     try:
         source.start()
-        stats = run_repl(config, source, vlm, writer)
+        stats = run_repl(config, source, vlm, writer, sidecar)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         logger.info("Keyboard interrupt received")
     finally:
         source.stop()
         source.release()
+        if location_server is not None:
+            location_server.stop()
         print_run_summary(stats)
         print("Stopped.")
 

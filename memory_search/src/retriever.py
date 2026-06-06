@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from src.config import PROJECT_ROOT, Config
 from src.schema import LoadedMemory, ParsedMemoryQuery, ScoredMemory
-from src.utils import resolve_image_path
+from src.utils import resolve_record_image_path
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,7 @@ def _score_memory(
     score = 0.0
 
     summary_lower = record.summary.lower()
+    answer_lower = record.model_answer.lower()
     scene_lower = record.scene_type.lower()
     reason_lower = record.memory_reason.lower()
     question_lower = record.user_question.lower()
@@ -174,6 +175,8 @@ def _score_memory(
             score += 4
 
     for keyword in query.keywords:
+        if keyword in answer_lower:
+            score += 4
         if keyword in summary_lower:
             score += 3
         if any(keyword in text for text in text_lower):
@@ -195,7 +198,7 @@ def _score_memory(
     if score == 0.0 and not _has_non_time_filters(query):
         score = 1.0
 
-    image_path = resolve_image_path(record.image_path, config.memory_base_dir)
+    image_path = resolve_record_image_path(record, config.memory_base_dir)
     try:
         display_path = str(image_path.relative_to(PROJECT_ROOT))
     except ValueError:

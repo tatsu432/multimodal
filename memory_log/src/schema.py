@@ -1,21 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 PrivacyRisk = Literal["low", "medium", "high"]
-
-REQUIRED_ANALYSIS_FIELDS = frozenset(
-    {
-        "summary",
-        "scene_type",
-        "objects",
-        "people_count",
-        "text_visible",
-        "should_store",
-        "memory_reason",
-        "privacy_risk",
-    }
-)
 
 
 class LocationInfo(BaseModel):
@@ -28,23 +15,45 @@ class LocationInfo(BaseModel):
 class MemoryRecord(BaseModel):
     memory_id: str
     timestamp: str
-    image_path: str
     user_question: str
-    summary: str
-    objects: list[str]
-    scene_type: str
-    people_count: int
-    text_visible: list[str]
     location: LocationInfo
-    should_store: bool
-    memory_reason: str
-    privacy_risk: PrivacyRisk
+    model_answer: str = ""
+    frame_paths: list[str] = Field(default_factory=list)
+    frame_timestamps: list[str] = Field(default_factory=list)
+    camera_source: str | None = None
+    image_path: str = ""
+    summary: str = ""
+    objects: list[str] = Field(default_factory=list)
+    scene_type: str = ""
+    people_count: int = 0
+    text_visible: list[str] = Field(default_factory=list)
+    should_store: bool = True
+    memory_reason: str = ""
+    privacy_risk: PrivacyRisk = "medium"
 
     @field_validator("privacy_risk", mode="before")
     @classmethod
     def normalize_privacy_risk(cls, value: object) -> str:
+        if value is None:
+            return "medium"
         if isinstance(value, str):
             normalized = value.strip().lower()
             if normalized in {"low", "medium", "high"}:
                 return normalized
-        raise ValueError("privacy_risk must be low, medium, or high")
+        return "medium"
+
+    @model_validator(mode="after")
+    def normalize_legacy(self) -> "MemoryRecord":
+        if not self.frame_paths and self.image_path:
+            self.frame_paths = [self.image_path]
+        if not self.model_answer and self.summary:
+            self.model_answer = self.summary
+        return self
+
+    def primary_image_path(self) -> str:
+        if self.frame_paths:
+            return self.frame_paths[0]
+        return self.image_path
+
+    def display_text(self) -> str:
+        return self.model_answer or self.summary or self.user_question
