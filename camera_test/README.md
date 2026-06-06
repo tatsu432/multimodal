@@ -74,7 +74,18 @@ CLI flags override env:
 
 ### 1. Tapo with RTSP
 
-Create a **Camera Account** in the Tapo app first: **Device Settings → Advanced Settings → Camera Account**. This is separate from your Tapo app login.
+Before using `camera_test`, confirm RTSP works on your LAN:
+
+1. **Find the camera IP** in the Tapo app: **Device Settings → Network / Networking** (wording varies by model).
+2. **Create a Camera Account** (separate from your Tapo app login): **Device Settings → Advanced Settings → Camera Account**. Use that username and password with the IP from step 1 to build the RTSP URL:
+
+   ```text
+   rtsp://camera_user:camera_pass@192.168.1.50:554/stream2
+   ```
+
+3. **Test in VLC** on your Mac: *Media → Open Network Stream…*, paste the URL, and confirm video plays.
+
+Then set `camera_test/.env`:
 
 ```env
 CAMERA_SOURCE=tapo-rtsp
