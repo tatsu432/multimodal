@@ -169,13 +169,22 @@ Unlike Tapo, the stream exists **only while the phone is actively publishing**.
 
 Easiest on a dev Mac: [mkcert](https://github.com/FiloSottile/mkcert) (locally trusted certs).
 
+First, find your Mac's **LAN IP** on Wi‑Fi (use this in the cert, `mediamtx-phone.yml`, and the phone publish URL — not a placeholder like `192.168.1.100`):
+
+```bash
+ipconfig getifaddr en0
+```
+
+If that prints nothing (Ethernet instead of Wi‑Fi), try `ipconfig getifaddr en1`. The phone must use this address on the **same Wi‑Fi** as your Mac.
+
 ```bash
 brew install mkcert
 mkcert -install
 cd camera_test
 mkdir -p mediamtx-certs
+# Replace YOUR_MAC_IP with the address from ipconfig above (e.g. 192.168.11.51)
 mkcert -key-file mediamtx-certs/server.key -cert-file mediamtx-certs/server.crt \
-  localhost 127.0.0.1 192.168.1.100   # replace with your Mac LAN IP
+  localhost 127.0.0.1 YOUR_MAC_IP
 ```
 
 Install the mkcert root CA on your phone too (mkcert prints how; on iOS: Settings → General → About → Certificate Trust Settings).
@@ -191,14 +200,49 @@ cd camera_test
 mediamtx mediamtx-phone.yml
 ```
 
-2. Note your Mac's **LAN IP** (e.g. `192.168.1.100`). The phone must reach it on the **same Wi‑Fi**.
+2. Confirm your Mac's **LAN IP** (same value as in the cert and `webrtcAdditionalHosts`):
+
+```bash
+ipconfig getifaddr en0
+```
+
+Use that address in the phone URL below (not `localhost`, not a README example IP). The phone must be on the **same Wi‑Fi**.
 3. On the phone, open (**https**, not http):
 
 ```text
-https://192.168.1.100:8889/phone/publish
+https://YOUR_MAC_IP:8889/phone/publish
 ```
 
-Allow camera access and start publishing. (OBS/WHIP: `https://192.168.1.100:8889/phone/whip`.)
+Example: if `ipconfig getifaddr en0` prints `192.168.11.51`, open `https://192.168.11.51:8889/phone/publish`.
+
+#### Publish page settings (before you tap Publish)
+
+MediaMTX shows a built-in form on that page. The phone's browser **encodes** the stream with these values; MediaMTX **relays** it (no server-side transcode). Pick settings for your goal — `camera-preview`, `camera-sample`, and `camera-vlm` only need clear video at modest resolution.
+
+| Field | What it does | How to choose |
+| ----- | ------------ | ------------- |
+| **Video device** | Camera, `screen` (screen share), or `none` | Use the back camera for room/scene capture; `none` if you only need audio. |
+| **Video codec** | How video is compressed (VP8, VP9, AV1, H264, H265 — list depends on phone/browser) | **H264** or **VP8** for best compatibility with Python RTSP relay and Mac preview. AV1/VP9/H265 can look sharper but use more phone CPU/battery and may not play everywhere. |
+| **Video bitrate (kbps)** | Target encoder bitrate in kilobits per second | **1500–2500** at 720p is enough for VLM and preview. Lower (800–1200) if Wi‑Fi is weak or the phone gets hot; raise only if the picture looks blocky. |
+| **Video framerate (ideal)** | Requested FPS (`ideal` — the phone may pick the nearest supported rate) | **15–24** for `camera-vlm` / sampling (those tools do not need 30 fps). **24–30** for smoother `camera-preview`. Higher fps costs bandwidth and battery. |
+| **Video width / height (ideal)** | Requested resolution (`ideal` — the phone may snap to a nearby mode, e.g. 1280×720) | **1280×720** is a good default for scene understanding. Use **960×540** to reduce lag and Wi‑Fi load; use **1920×1080** only if you need fine detail. |
+| **Audio device** | Microphone or `none` | **`none`** if you only care about video (simplest). Enable the mic if you will speak to the VLM or want ambient sound. |
+| **Audio codec** | Audio compression (usually **Opus**; may also offer G722, PCMU, PCMA) | **Opus** — best quality at low bitrate. Others are legacy/telephony. |
+| **Audio bitrate (kbps)** | Target audio bitrate | **32–64** for speech; **64–128** for room ambience. Irrelevant if audio device is `none`. |
+| **Optimize for voice** | When checked: echo cancellation, noise suppression, auto gain (speech-optimized mic processing) | **On** if you talk to `camera-vlm` or want clear speech. **Off** for raw/ambient audio (music, room tone); can sound worse for voice. |
+
+**Suggested presets**
+
+| Goal | Video | Audio |
+| ---- | ----- | ----- |
+| **Preview / frame sampling** (`camera-preview`, `camera-sample`) | H264 or VP8, **2000** kbps, **24** fps, **1280×720** | device **`none`** |
+| **VLM scene Q&A** (`camera-vlm`) | H264 or VP8, **1500–2000** kbps, **15–20** fps, **1280×720** (720p is plenty; the VLM samples ~1 fps) | Opus **64** kbps, voice **on** only if you ask questions by speech |
+| **Low Wi‑Fi / reduce heat** | Same codec, **1000** kbps, **15** fps, **960×540** | **`none`** |
+
+The form saves choices in the page URL (query parameters), so you can bookmark a tuned link. After adjusting, tap **Publish** and allow camera (and microphone, if enabled).
+
+(OBS/WHIP without this form: `https://YOUR_MAC_IP:8889/phone/whip` — set codec/bitrate in OBS instead.)
+
 4. Verify on your Mac: `https://localhost:8889/phone/`
 5. Point `camera_test` at the RTSP relay (path name must match `mediamtx-phone.yml`):
 
@@ -321,7 +365,7 @@ MediaMTX is not loading the YAML file you edited. Copy the example to `mediamtx-
 
 **Tapo WebRTC:** ensure MediaMTX is pulling RTSP (`sourceOnDemand: no` or open the browser player once).
 
-**Phone WebRTC:** path `**phone`** has no stream until the phone is publishing at `https://YOUR_MAC_IP:8889/phone/publish`.
+**Phone WebRTC:** path `**phone`** has no stream until the phone is publishing at `https://YOUR_MAC_IP:8889/phone/publish` (get `YOUR_MAC_IP` with `ipconfig getifaddr en0` on the Mac).
 
 **Phone publish page: "can't access webcams or microphones"**
 
