@@ -163,5 +163,9 @@ def _record_metadata(item: LoadedMemory) -> dict[str, str | int | float | bool]:
         "privacy_risk": record.privacy_risk,
         "people_count": record.people_count,
         "location_label": record.location.label or "",
+        "location_full_address": record.location.full_address or "",
+        "location_city": record.location.city or "",
+        "location_prefecture": record.location.prefecture or "",
+        "location_postal_code": record.location.postal_code or "",
         "should_store": record.should_store,
     }

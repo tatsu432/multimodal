@@ -110,7 +110,7 @@ def _apply_hard_filters(
             continue
 
         if query.location_filters and not _matches_location_filters(
-            record.location.label, query.location_filters
+            record.location, query.location_filters
         ):
             continue
 
@@ -136,13 +136,13 @@ def _matches_scene_filters(scene_type: str, filters: list[str]) -> bool:
 
 
 def _matches_location_filters(
-    label: str | None,
+    location,
     filters: list[str],
 ) -> bool:
-    if not label:
+    searchable = location.search_text().lower()
+    if not searchable:
         return False
-    label_lower = label.lower()
-    return any(filt in label_lower for filt in filters)
+    return any(filt in searchable for filt in filters)
 
 
 def _score_memory(
@@ -160,7 +160,7 @@ def _score_memory(
     question_lower = record.user_question.lower()
     objects_lower = [obj.lower() for obj in record.objects]
     text_lower = [text.lower() for text in record.text_visible]
-    location_label = (record.location.label or "").lower()
+    location_searchable = record.location.search_text().lower()
 
     for obj_filter in query.object_filters:
         if any(obj_filter in obj for obj in objects_lower):
@@ -171,7 +171,7 @@ def _score_memory(
             score += 4
 
     for loc_filter in query.location_filters:
-        if loc_filter in location_label:
+        if loc_filter in location_searchable:
             score += 4
 
     for keyword in query.keywords:

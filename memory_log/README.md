@@ -60,6 +60,7 @@ uv sync
 | `TAPO_LOCATION_`*                                | Fixed location for Tapo cameras                                                             |
 | `PHONE_LOCATION_*`                               | Fallback when phone GPS sidecar is off or stale                                             |
 | `LOCATION_SERVER_*`                              | Optional HTTPS sidecar for phone GPS (see below)                                            |
+| `GEOCODE_*`, `NOMINATIM_BASE_URL`                | Reverse geocode lat/lon to address at write time (see below)                                |
 
 
 ## Location metadata
@@ -92,7 +93,29 @@ https://YOUR_MAC_IP:8765/
 such as https://192.168.11.51:8765/ 
 ```
 
-Keep that page open so `memory_log` receives live lat/lon. See `[camera_test/README.md](../camera_test/README.md#phone-gps-sidecar-for-memory_log)` for cert setup.
+Keep that page open so `memory_log` receives live lat/lon. See [`camera_test/README.md`](../camera_test/README.md#phone-gps-sidecar-for-memory_log) for cert setup.
+
+### Reverse geocoding (address from lat/lon)
+
+When a memory has **coordinates but no manual label**, `memory_log` can resolve a **full street address** and structured place fields at write time (not at search time). Results are cached in SQLite so repeated questions in the same area do not hit the network again.
+
+```env
+GEOCODE_ENABLED=true
+GEOCODE_PROVIDER=nominatim
+NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
+GEOCODE_CACHE_PATH=outputs/geocode_cache.sqlite
+GEOCODE_SKIP_IF_LABEL_SET=false
+```
+
+**When geocoding runs**
+
+- Any source with lat/lon and no cached `full_address` → Nominatim reverse lookup → fills `full_address`, `city`, `prefecture`, `postal_code`, `country` (manual `*_LOCATION_LABEL` is kept as `label`)
+- Set `GEOCODE_SKIP_IF_LABEL_SET=true` only if you already store a full address and want to avoid API calls
+- Cache key rounds coordinates to ~11 m; walking in one neighborhood reuses one cached address
+
+**Privacy:** full addresses make JSONL more sensitive (home/work identifiable). Disable with `GEOCODE_ENABLED=false`, or keep manual labels only. The public Nominatim service has a **1 request/second** limit — the client throttles and caches; for heavy use, self-host Nominatim.
+
+**Search:** `memory_search` and `vector_memory` match location filters against `label`, `full_address`, `city`, `prefecture`, `postal_code`, and `country`.
 
 ## Camera sources (Tapo RTSP, MediaMTX, phone WebRTC)
 
@@ -218,7 +241,14 @@ Assistant: A desk with a laptop and cables near a window.
     "label": "home office",
     "lat": 35.6812,
     "lon": 139.7671,
-    "source": "config"
+    "source": "config",
+    "full_address": "1-2-3 Example St, 渋谷区, 東京都 150-0001, Japan",
+    "city": "渋谷区",
+    "prefecture": "東京都",
+    "postal_code": "150-0001",
+    "country": "Japan",
+    "geocode_provider": "nominatim",
+    "geocoded_at": "2026-06-06T16:57:09.525+09:00"
   },
   "camera_source": "tapo-rtsp"
 }
@@ -250,6 +280,7 @@ Run summary:
 - **OpenAI + Ollama** — set `VLM_PROVIDER` / `VLM_MODEL` (Ollama needs a vision model, e.g. `llava`).
 - **Tapo has no GPS** — use config labels/coordinates for fixed cameras.
 - **Phone GPS** — requires HTTPS location sidecar page open on the phone.
+- **Geocoded addresses** — optional; full street addresses increase log sensitivity.
 - **Legacy JSONL** — older records with `summary`/`objects` remain readable by search tools.
 
 ## Next step

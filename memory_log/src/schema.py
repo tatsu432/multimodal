@@ -10,6 +10,52 @@ class LocationInfo(BaseModel):
     lat: float | None = None
     lon: float | None = None
     source: str = "manual_or_not_available"
+    full_address: str | None = None
+    city: str | None = None
+    prefecture: str | None = None
+    country: str | None = None
+    postal_code: str | None = None
+    geocode_provider: str | None = None
+    geocoded_at: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if not normalized.get("full_address") and normalized.get("address"):
+            normalized["full_address"] = normalized["address"]
+        if not normalized.get("city") and normalized.get("place_name"):
+            normalized["city"] = normalized["place_name"]
+        if not normalized.get("prefecture") and normalized.get("admin_area"):
+            normalized["prefecture"] = normalized["admin_area"]
+        return normalized
+
+    def search_text(self) -> str:
+        parts = [
+            self.label,
+            self.full_address,
+            self.city,
+            self.prefecture,
+            self.country,
+            self.postal_code,
+        ]
+        return " ".join(part for part in parts if part)
+
+    def display_name(self) -> str:
+        if self.label:
+            return self.label
+        if self.full_address:
+            return self.full_address
+        parts = [self.city, self.prefecture, self.country]
+        text = ", ".join(part for part in parts if part)
+        if text:
+            return text
+        if self.lat is not None and self.lon is not None:
+            return f"{self.lat:.5f},{self.lon:.5f}"
+        return "not available"
 
 
 class MemoryRecord(BaseModel):

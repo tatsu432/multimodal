@@ -96,8 +96,12 @@ def _format_evidence_block(
             lines.append(f"   Objects: {format_objects(record.objects)}")
         if record.scene_type:
             lines.append(f"   Scene: {record.scene_type}")
-        if record.location.label:
-            lines.append(f"   Location: {record.location.label}")
+        if (
+            record.location.label
+            or record.location.full_address
+            or record.location.city
+        ):
+            lines.append(f"   Location: {record.location.display_name()}")
         if record.frame_paths:
             lines.append(
                 f"   Frames: {len(record.frame_paths)} ({display_image}{image_suffix})"

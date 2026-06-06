@@ -2,6 +2,7 @@ import threading
 import time
 
 from src.config import Config
+from src.geocode_client import GeocodeClient
 from src.schema import LocationInfo
 
 
@@ -107,3 +108,41 @@ def resolve_location(
         return configured
 
     return LocationInfo(source="manual_or_not_available")
+
+
+def enrich_location_with_geocode(
+    config: Config,
+    location: LocationInfo,
+    geocode_client: GeocodeClient | None,
+) -> LocationInfo:
+    if not config.geocode_enabled or geocode_client is None:
+        return location
+
+    if (
+        config.geocode_skip_if_label_set
+        and location.label
+        and location.full_address
+    ):
+        return location
+
+    if location.lat is None or location.lon is None:
+        return location
+
+    if location.full_address:
+        return location
+
+    result = geocode_client.reverse_geocode(location.lat, location.lon)
+    if result is None:
+        return location
+
+    return location.model_copy(
+        update={
+            "full_address": result.full_address,
+            "city": result.city,
+            "prefecture": result.prefecture,
+            "country": result.country,
+            "postal_code": result.postal_code,
+            "geocode_provider": result.geocode_provider,
+            "geocoded_at": result.geocoded_at,
+        }
+    )

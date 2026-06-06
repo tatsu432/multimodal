@@ -60,11 +60,11 @@ def format_objects(objects: list[str]) -> str:
 
 
 def memory_to_embedding_text(memory: MemoryRecord) -> str:
-    location_label = memory.location.label or "not available"
+    location_text = memory.location.search_text() or "not available"
     parts = [
         f"Question: {memory.user_question}",
         f"Answer: {memory.model_answer or memory.summary or 'not available'}",
-        f"Location: {location_label}.",
+        f"Location: {location_text}.",
     ]
 
     if memory.summary and memory.summary != memory.model_answer:

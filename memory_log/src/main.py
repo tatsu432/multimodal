@@ -10,7 +10,12 @@ from providers.ollama import OllamaError, ensure_model
 
 from src.config import Config
 from src.frame_source import FrameSource, create_frame_source
-from src.location import LocationSidecarStore, resolve_location
+from src.geocode_client import GeocodeClient
+from src.location import (
+    LocationSidecarStore,
+    enrich_location_with_geocode,
+    resolve_location,
+)
 from src.location_server import LocationServer
 from src.memory_writer import MemoryWriter
 from src.vlm_client import VLMClient, create_vlm_client
@@ -44,11 +49,7 @@ class RunStats:
 
 
 def _format_location_label(location) -> str:
-    if location.label:
-        return location.label
-    if location.lat is not None and location.lon is not None:
-        return f"{location.lat:.5f},{location.lon:.5f}"
-    return "-"
+    return location.display_name()
 
 
 def _log_memory_line(record, latency_sec: float) -> None:
@@ -71,6 +72,7 @@ def _handle_question(
     vlm: VLMClient,
     writer: MemoryWriter,
     sidecar: LocationSidecarStore | None,
+    geocode_client: GeocodeClient | None,
     question: str,
     stats: RunStats,
 ) -> None:
@@ -118,6 +120,7 @@ def _handle_question(
         sidecar,
         config.camera_source_key,
     )
+    location = enrich_location_with_geocode(config, location, geocode_client)
 
     try:
         record = writer.save_memory(
@@ -143,6 +146,7 @@ def run_repl(
     vlm: VLMClient,
     writer: MemoryWriter,
     sidecar: LocationSidecarStore | None,
+    geocode_client: GeocodeClient | None,
 ) -> RunStats:
     stats = RunStats()
     start_time = time.monotonic()
@@ -178,7 +182,14 @@ def run_repl(
 
         try:
             _handle_question(
-                config, source, vlm, writer, sidecar, question, stats
+                config,
+                source,
+                vlm,
+                writer,
+                sidecar,
+                geocode_client,
+                question,
+                stats,
             )
         except Exception as exc:
             logger.exception("Error handling question: %s", exc)
@@ -231,6 +242,7 @@ def main() -> None:
 
     sidecar: LocationSidecarStore | None = None
     location_server: LocationServer | None = None
+    geocode_client: GeocodeClient | None = None
     if config.location_server_enabled:
         sidecar = LocationSidecarStore(max_age_sec=config.location_gps_max_age_sec)
         location_server = LocationServer(
@@ -242,6 +254,9 @@ def main() -> None:
         )
         location_server.start()
 
+    if config.geocode_enabled:
+        geocode_client = GeocodeClient(config)
+
     source = create_frame_source(config)
     vlm = create_vlm_client(config)
     writer = MemoryWriter(config)
@@ -249,7 +264,7 @@ def main() -> None:
     stats = RunStats()
     try:
         source.start()
-        stats = run_repl(config, source, vlm, writer, sidecar)
+        stats = run_repl(config, source, vlm, writer, sidecar, geocode_client)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         logger.info("Keyboard interrupt received")
@@ -258,6 +273,8 @@ def main() -> None:
         source.release()
         if location_server is not None:
             location_server.stop()
+        if geocode_client is not None:
+            geocode_client.close()
         print_run_summary(stats)
         print("Stopped.")
 

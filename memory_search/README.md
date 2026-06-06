@@ -105,7 +105,7 @@ If no records match, the answer says so clearly — nothing is hallucinated.
 - **No semantic similarity** — "notebook" won't find "laptop" unless both appear in structured fields.
 - **Object names must be in JSONL** — search relies on Step 2 VLM extraction quality.
 - **Memories loaded at startup** — restart to pick up newly written records.
-- **Location search** — only works when `location.label` was set during capture.
+- **Location search** — matches `location.label`, geocoded `full_address`, `city`, `prefecture`, `postal_code`, and `country`.
 
 ## Next step
 

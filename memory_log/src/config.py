@@ -9,6 +9,7 @@ from src.utils import parse_bool_env, parse_optional_float_env
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
+VALID_GEOCODE_PROVIDERS = frozenset({"nominatim"})
 
 
 def _optional_label(value: str) -> str | None:
@@ -58,6 +59,12 @@ class Config:
     location_server_cert: Path | None
     location_server_key: Path | None
     location_gps_max_age_sec: float
+    geocode_enabled: bool
+    geocode_provider: str
+    nominatim_base_url: str
+    geocode_cache_path: Path
+    geocode_timeout_sec: float
+    geocode_skip_if_label_set: bool
     save_frames: bool
     max_runtime_seconds: float | None
 
@@ -76,6 +83,12 @@ class Config:
         )
         if not memory_jsonl_path.is_absolute():
             memory_jsonl_path = PROJECT_ROOT / memory_jsonl_path
+
+        geocode_cache_path = Path(
+            os.getenv("GEOCODE_CACHE_PATH", "outputs/geocode_cache.sqlite")
+        )
+        if not geocode_cache_path.is_absolute():
+            geocode_cache_path = PROJECT_ROOT / geocode_cache_path
 
         return cls(
             frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "camera")
@@ -131,6 +144,18 @@ class Config:
             ),
             location_gps_max_age_sec=float(
                 os.getenv("LOCATION_GPS_MAX_AGE_SEC", "120")
+            ),
+            geocode_enabled=parse_bool_env(os.getenv("GEOCODE_ENABLED", "true")),
+            geocode_provider=os.getenv("GEOCODE_PROVIDER", "nominatim")
+            .strip()
+            .lower(),
+            nominatim_base_url=os.getenv(
+                "NOMINATIM_BASE_URL", "https://nominatim.openstreetmap.org"
+            ).strip(),
+            geocode_cache_path=geocode_cache_path,
+            geocode_timeout_sec=float(os.getenv("GEOCODE_TIMEOUT_SEC", "5")),
+            geocode_skip_if_label_set=parse_bool_env(
+                os.getenv("GEOCODE_SKIP_IF_LABEL_SET", "false")
             ),
             save_frames=parse_bool_env(os.getenv("SAVE_FRAMES", "true")),
             max_runtime_seconds=parse_optional_float_env(
@@ -207,6 +232,18 @@ class Config:
                 raise ValueError(
                     f"LOCATION_SERVER_KEY not found: {self.location_server_key}"
                 )
+
+        if self.geocode_enabled:
+            if self.geocode_provider not in VALID_GEOCODE_PROVIDERS:
+                raise ValueError(
+                    f"GEOCODE_PROVIDER must be one of "
+                    f"{sorted(VALID_GEOCODE_PROVIDERS)}, "
+                    f"got {self.geocode_provider!r}"
+                )
+            if self.geocode_timeout_sec <= 0:
+                raise ValueError("GEOCODE_TIMEOUT_SEC must be positive")
+            if not self.nominatim_base_url.startswith(("http://", "https://")):
+                raise ValueError("NOMINATIM_BASE_URL must be an http(s) URL")
 
     @property
     def vlm_source_key(self) -> str:
