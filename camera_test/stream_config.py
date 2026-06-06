@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import cv2
+
+_CAMERA_TEST_DIR = Path(__file__).resolve().parent
+DEFAULT_RTSP_FFMPEG_LOG = _CAMERA_TEST_DIR / "rtsp_decode.log"
+
+_ffmpeg_stderr_installed = False
 
 VALID_CAMERA_SOURCES = frozenset({"tapo-rtsp", "tapo-webrtc", "phone-webrtc"})
 
@@ -88,6 +96,64 @@ def _is_local_rtsp(url: str) -> bool:
 
     host = (urlparse(url).hostname or "").lower()
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def configure_decode_logging() -> None:
+    """
+    Route FFmpeg/libav decode warnings to a log file instead of the terminal.
+
+    Call after ``load_dotenv()`` so ``RTSP_FFMPEG_LOG`` from ``.env`` applies.
+    """
+    install_ffmpeg_stderr_log()
+
+
+def install_ffmpeg_stderr_log() -> Path | None:
+    """
+    Redirect OS stderr (fd 2) to a log file.
+
+    FFmpeg/libav (inside OpenCV) writes directly to file descriptor 2, bypassing
+    Python's ``sys.stderr`` wrapper. ``dup2`` catches those C-level messages.
+    """
+    global _ffmpeg_stderr_installed
+    if _ffmpeg_stderr_installed:
+        return _resolve_ffmpeg_log_path()
+
+    log_path = _resolve_ffmpeg_log_path()
+    if log_path is None:
+        _ffmpeg_stderr_installed = True
+        return None
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    terminal_stderr_fd = os.dup(2)
+    log_fd = os.open(
+        str(log_path),
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o644,
+    )
+    header = (
+        f"\n--- RTSP/FFmpeg decode log started "
+        f"{datetime.now(timezone.utc).isoformat()} ---\n"
+    )
+    os.write(log_fd, header.encode("utf-8"))
+    os.dup2(log_fd, 2)
+    os.close(log_fd)
+
+    # Python tracebacks / library errors still go to the real terminal.
+    sys.stderr = os.fdopen(terminal_stderr_fd, "w", buffering=1, closefd=True)
+
+    _ffmpeg_stderr_installed = True
+    print(f"[rtsp] FFmpeg decode warnings → {log_path}", file=sys.stdout)
+    return log_path
+
+
+def _resolve_ffmpeg_log_path() -> Path | None:
+    raw = os.getenv("RTSP_FFMPEG_LOG", "rtsp_decode.log").strip()
+    if raw.lower() in {"0", "false", "no", "off", "none", "disable", "disabled"}:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = _CAMERA_TEST_DIR / path
+    return path
 
 
 def _build_rtsp_ffmpeg_options(url: str, transport: str) -> str:
@@ -215,6 +281,7 @@ def _open_rtsp_stream(url: str) -> cv2.VideoCapture:
 def open_stream(url: str) -> cv2.VideoCapture:
     if not url.startswith("rtsp://"):
         raise ValueError(f"Expected RTSP URL, got {url!r}")
+    configure_decode_logging()
     return _open_rtsp_stream(url)
 
 

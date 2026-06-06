@@ -1,6 +1,7 @@
 import argparse
 import base64
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -13,7 +14,17 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from providers.ollama import chat as ollama_chat
 
-from stream_config import add_source_args, open_source, read_frame, resolve_source, source_description
+from stream_config import (
+    StaleStreamDetector,
+    add_source_args,
+    configure_decode_logging,
+    frame_signature,
+    open_source,
+    read_frame,
+    release_source,
+    resolve_source,
+    source_description,
+)
 
 
 @dataclass
@@ -88,22 +99,37 @@ def capture_stream_loop(
             continue
 
         print("[capture] Source opened.")
+        stale_detector = StaleStreamDetector()
         last_sample_time = 0.0
+        last_added_sig: bytes | None = None
+        read_failures = 0
 
         while not stop_event.is_set():
             ok, frame = read_frame(cap, source_type)
 
             if not ok:
-                print("[capture] Failed to read frame. Reconnecting...")
+                read_failures += 1
+                if read_failures >= 5:
+                    print("[capture] Too many read failures. Reconnecting...")
+                    break
+                time.sleep(0.2)
+                continue
+            read_failures = 0
+
+            if stale_detector.check(frame) == "stale":
+                print("[capture] Stream frozen — reconnecting...")
                 break
 
             now = time.time()
 
             if now - last_sample_time >= sample_interval_sec:
-                last_sample_time = now
-                buffer.add(frame)
+                sig = frame_signature(frame)
+                if sig != last_added_sig:
+                    last_sample_time = now
+                    last_added_sig = sig
+                    buffer.add(frame)
 
-        cap.release()
+        release_source(cap)
 
 
 def _build_question_prompt(question: str, frames: List[FrameItem]) -> tuple[str, list[str]]:
@@ -187,8 +213,16 @@ def ask_vlm_about_recent_frames(
     raise ValueError(f"Unsupported VLM provider: {provider!r}")
 
 
+def read_user_question() -> str:
+    """Prompt on stdout — never stderr (fd 2 may be redirected to rtsp_decode.log)."""
+    sys.stdout.write("\nYou: ")
+    sys.stdout.flush()
+    return input().strip()
+
+
 def main() -> None:
     load_dotenv()
+    configure_decode_logging()
 
     parser = argparse.ArgumentParser(
         description="Ask a VLM questions about Tapo or smartphone camera streams."
@@ -235,11 +269,14 @@ def main() -> None:
     print("- Is there a person in front of the camera?")
     print("- What changed in the last few seconds?")
     print("- Is the camera facing a desk, street, or room?")
-    print("\nType 'q' or 'quit' to stop.\n")
+    print("\nType 'q' or 'quit' to stop.")
+
+    while not frame_buffer.get_latest():
+        time.sleep(0.1)
 
     try:
         while True:
-            question = input("You: ").strip()
+            question = read_user_question()
 
             if question.lower() in {"q", "quit", "exit"}:
                 break

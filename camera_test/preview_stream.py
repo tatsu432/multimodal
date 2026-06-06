@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from stream_config import (
     StaleStreamDetector,
     add_source_args,
+    configure_decode_logging,
     describe_open_failure,
     open_source,
     read_frame,
@@ -18,6 +19,7 @@ from stream_config import (
 
 def main() -> None:
     load_dotenv()
+    configure_decode_logging()
 
     parser = argparse.ArgumentParser(
         description="Preview Tapo (RTSP/WebRTC) or smartphone (WebRTC) streams."

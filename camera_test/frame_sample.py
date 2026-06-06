@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from stream_config import (
     StaleStreamDetector,
     add_source_args,
+    configure_decode_logging,
     describe_open_failure,
     frame_signature,
     open_source,
@@ -23,6 +24,7 @@ INTERVAL_SEC = 2.0
 
 def main() -> None:
     load_dotenv()
+    configure_decode_logging()
 
     parser = argparse.ArgumentParser(
         description="Sample frames from Tapo (RTSP/WebRTC) or smartphone (WebRTC)."

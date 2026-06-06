@@ -4,6 +4,7 @@ mediamtx-certs/
 __pycache__/
 *.py[cod]
 sampled_frames/
+rtsp_decode.log
 outputs/**/*.jpg
 outputs/**/*.jpeg
 outputs/**/*.png

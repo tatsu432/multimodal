@@ -344,7 +344,7 @@ Python is not receiving WebRTC directly — it reads `rtsp://127.0.0.1:8554/phon
 
 **H264 errors in terminal (`corrupted macroblock`, `Missing reference picture`)**
 
-Harmless FFmpeg warnings when joining mid-stream or after a brief phone/WebRTC glitch. If saves become duplicates, the script reconnects RTSP automatically; refresh the phone publish page if it keeps happening.
+Harmless FFmpeg warnings when joining mid-stream or after a brief phone/WebRTC glitch. They are **not VLM errors**. By default they go to **`camera_test/rtsp_decode.log`** (not the terminal). Set `RTSP_FFMPEG_LOG=off` to print them inline, or `RTSP_FFMPEG_LOG=/path/to/file.log` to customize. If the VLM keeps seeing stale scenes, the capture thread reconnects RTSP automatically; refresh the phone publish page if it keeps happening.
 
 ## Suggested workflow
 
