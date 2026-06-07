@@ -130,6 +130,28 @@ class ChromaVectorIndex:
         col = self._get_collection(owner_table)
         col.upsert(ids=[owner_id], embeddings=[vector], metadatas=[metadata])
 
+    def count(self, owner_table: str) -> int:
+        """Return the number of embeddings stored for *owner_table* (0 on error)."""
+        try:
+            return self._get_collection(owner_table).count()
+        except Exception as exc:
+            logger.debug("count(%s) failed: %s", owner_table, exc)
+            return 0
+
+    def existing_ids(self, owner_table: str) -> set[str]:
+        """Return the set of all doc ids currently stored for *owner_table*.
+
+        Uses ``col.get(include=[])`` so no vectors or metadata are fetched — cheapest
+        possible membership query.  Returns an empty set on any error.
+        """
+        try:
+            col = self._get_collection(owner_table)
+            result = col.get(include=[])
+            return set(result.get("ids") or [])
+        except Exception as exc:
+            logger.debug("existing_ids(%s) failed: %s", owner_table, exc)
+            return set()
+
     def search(
         self,
         owner_table: str,

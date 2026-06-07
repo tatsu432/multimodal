@@ -312,6 +312,46 @@ OPENAI_API_KEY=sk-...
 Then re-run `uv run python -m src.embed_index` — new model-namespaced collections
 (`<store>__text-embedding-3-small`) are created without overwriting the Ollama collections.
 
+## LTM query telemetry
+
+Each LTM query run appends one row to `outputs/long_term_query_logs.sqlite` when
+`LTM_QUERY_LOG_ENABLED=true` (default). The row captures full per-stage I/O for debugging:
+
+| Column | What it contains |
+|---|---|
+| `plan_json` | Parsed `RetrievalPlan` — intent, time range, location, semantic query, stores |
+| `planner_raw_response` | Raw LLM output before JSON parsing (helps debug malformed plans) |
+| `retrieval_trace_json` | JSON array — one object per queried store: `store`, `method` (`vector`/`like`/`metadata`), `candidate_count` (ChromaDB hits before SQL filter), `sql`, `params`, `final_count`, and a `note` when candidates were dropped by time/location filters |
+| `answer_prompt` | Exact evidence text sent to the answer generator |
+| `answer` | Final answer returned to the user |
+| `error` | Exception message if the pipeline failed |
+| `extra_json` | Summary for quick SQL queries: `vector_used`, `stores_selected_but_empty` (stores where vector found candidates but SQL filters eliminated them all), `expanded` |
+| `latency_*_ms` | Per-stage latency: `plan`, `grounding`, `retrieval`, `answer`, `total` |
+
+The `retrieval_trace_json` + `extra_json.stores_selected_but_empty` are designed specifically to
+expose the silent "candidates→0 rows" failure where vector search selects memories but the
+time-range or location filter in the SQL step eliminates them all.
+
+**Inspect a run:**
+
+```bash
+# Trace for the most recent query
+sqlite3 outputs/long_term_query_logs.sqlite \
+  "SELECT retrieval_trace_json FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 1;" \
+  | jq .
+
+# Find queries where vector candidates were dropped by SQL filters
+sqlite3 outputs/long_term_query_logs.sqlite \
+  "SELECT user_query, extra_json FROM long_term_query_logs WHERE extra_json LIKE '%stores_selected_but_empty%' ORDER BY timestamp_utc DESC;"
+
+# Latency summary
+sqlite3 outputs/long_term_query_logs.sqlite \
+  "SELECT user_query, intent, round(latency_total_ms) as total_ms, round(latency_retrieval_ms) as retr_ms FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 10;"
+```
+
+The app-log file (`RTSP_FFMPEG_LOG`) also records a readable per-stage INFO trace for each
+query, including the `method + candidates → rows` line for every store.
+
 ## Known limitations
 
 - **OpenAI + Ollama** — set `VLM_PROVIDER` / `VLM_MODEL` (Ollama needs a vision model, e.g. `llava`).

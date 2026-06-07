@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 
 from src.config import Config, PROJECT_ROOT
-from src.ltm_query.answer_generator import AnswerGenerator
+from src.ltm_query.answer_generator import AnswerGenerator, format_evidence
 from src.ltm_query.evidence import VisualGroundingResult, build_evidence_pack
 from src.ltm_query.query_planner import QueryPlanner, RetrievalPlan
 from src.ltm_query.retrieval import MemoryRetriever
@@ -84,6 +84,7 @@ def run_query(
     answer: str | None = None
     error: str | None = None
     expanded = False
+    answer_prompt: str | None = None
 
     try:
         print("\nPlanning...")
@@ -153,6 +154,10 @@ def run_query(
             expanded_results = retriever.retrieve(expanded_plan)
             results.promoted_events = expanded_results.promoted_events
             results.active_queries = expanded_results.active_queries
+            # Merge expansion trace so both attempts are visible in telemetry
+            for t in expanded_results.trace:
+                t.note = (t.note or "") + " [post-expansion]"
+            results.trace.extend(expanded_results.trace)
             if results.promoted_events or results.active_queries:
                 print(f"  found {len(results.promoted_events)} events after expansion")
             expanded = True
@@ -163,6 +168,7 @@ def run_query(
 
         evidence = build_evidence_pack(query, plan, results, visual_grounding)
         _print_evidence_summary(evidence)
+        answer_prompt = format_evidence(evidence)
 
         print("\nGenerating answer...")
         t0 = time.perf_counter()
@@ -191,6 +197,8 @@ def run_query(
                     no_grounding=no_grounding,
                     vlm_provider=config.vlm_provider,
                     vlm_model=config.vlm_model,
+                    planner_raw_response=getattr(planner, "last_raw_response", None),
+                    answer_prompt=answer_prompt,
                 )
                 log_writer.log(record)
             except Exception as log_exc:
@@ -258,6 +266,22 @@ def main() -> None:
                     embedding_client.provider,
                     embedding_client.model,
                 )
+                if config.embed_auto_backfill:
+                    try:
+                        from src.embed_index import reconcile_model_index
+                        stats = reconcile_model_index(conn, embedding_client, vector_index)
+                        total_backfilled = sum(idx for _t, idx in stats.values())
+                        if total_backfilled:
+                            logger.info(
+                                "Auto-backfill: embedded %d missing rows via %s/%s",
+                                total_backfilled,
+                                embedding_client.provider,
+                                embedding_client.model,
+                            )
+                    except Exception as _backfill_exc:
+                        logger.warning(
+                            "Auto-backfill skipped (LIKE fallback active): %s", _backfill_exc
+                        )
         except Exception as exc:
             logger.warning("Vector search init failed (falling back to LIKE): %s", exc)
 

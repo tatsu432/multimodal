@@ -24,7 +24,7 @@ Rules:
 """
 
 
-def _format_evidence(evidence: EvidencePack) -> str:
+def format_evidence(evidence: EvidencePack) -> str:
     lines: list[str] = [f"User query: {evidence.user_query}"]
 
     if evidence.time_range_description:
@@ -86,11 +86,20 @@ class AnswerGenerator:
         self._config = config
 
     def generate(self, evidence: EvidencePack) -> str:
-        evidence_text = _format_evidence(evidence)
+        evidence_text = format_evidence(evidence)
+        logger.info(
+            "Answer generation: evidence_prompt_chars=%d events=%d active_queries=%d",
+            len(evidence_text),
+            len(evidence.promoted_events),
+            len(evidence.active_queries),
+        )
         try:
             if self._config.vlm_provider == "openai":
-                return self._call_openai(evidence_text)
-            return self._call_ollama(evidence_text)
+                answer = self._call_openai(evidence_text)
+            else:
+                answer = self._call_ollama(evidence_text)
+            logger.info("Answer generated: answer_chars=%d", len(answer))
+            return answer
         except Exception as exc:
             logger.error("Answer generation failed: %s", exc)
             return f"I encountered an error generating the answer: {exc}"

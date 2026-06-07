@@ -67,7 +67,11 @@ CREATE TABLE IF NOT EXISTS long_term_query_logs (
     vlm_model             TEXT,
 
     created_at_utc        TEXT NOT NULL,
-    extra_json            TEXT
+    extra_json            TEXT,
+
+    planner_raw_response  TEXT,
+    retrieval_trace_json  TEXT,
+    answer_prompt         TEXT
 )
 """
 
@@ -75,6 +79,24 @@ CREATE_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_ltq_logs_time ON long_term_query_logs(timestamp_utc)",
     "CREATE INDEX IF NOT EXISTS idx_ltq_logs_intent ON long_term_query_logs(intent)",
 )
+
+# Columns added after the initial schema; _ensure_columns() migrates existing DBs.
+_EXTRA_COLUMNS: list[tuple[str, str]] = [
+    ("planner_raw_response", "TEXT"),
+    ("retrieval_trace_json", "TEXT"),
+    ("answer_prompt", "TEXT"),
+]
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Idempotently add columns that may be missing from older DB files."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(long_term_query_logs)")}
+    for col_name, col_type in _EXTRA_COLUMNS:
+        if col_name not in existing:
+            conn.execute(
+                f"ALTER TABLE long_term_query_logs ADD COLUMN {col_name} {col_type}"
+            )
+    conn.commit()
 
 
 @dataclass
@@ -110,6 +132,9 @@ class QueryLogRecord:
     vlm_model: str | None
     created_at_utc: str
     extra_json: str | None = None
+    planner_raw_response: str | None = None
+    retrieval_trace_json: str | None = None
+    answer_prompt: str | None = None
 
 
 class QueryLogWriter:
@@ -126,6 +151,7 @@ class QueryLogWriter:
         for stmt in CREATE_INDEX_SQL:
             self._conn.execute(stmt)
         self._conn.commit()
+        _ensure_columns(self._conn)
 
     def log(self, record: QueryLogRecord) -> None:
         with self._lock:
@@ -143,7 +169,8 @@ class QueryLogWriter:
                     latency_total_ms, latency_plan_ms, latency_grounding_ms,
                     latency_retrieval_ms, latency_answer_ms,
                     vlm_provider, vlm_model,
-                    created_at_utc, extra_json
+                    created_at_utc, extra_json,
+                    planner_raw_response, retrieval_trace_json, answer_prompt
                 ) VALUES (
                     :query_log_id, :timestamp_utc, :timestamp_local, :timezone,
                     :user_query, :intent, :semantic_query,
@@ -156,7 +183,8 @@ class QueryLogWriter:
                     :latency_total_ms, :latency_plan_ms, :latency_grounding_ms,
                     :latency_retrieval_ms, :latency_answer_ms,
                     :vlm_provider, :vlm_model,
-                    :created_at_utc, :extra_json
+                    :created_at_utc, :extra_json,
+                    :planner_raw_response, :retrieval_trace_json, :answer_prompt
                 )
                 """,
                 asdict(record),
@@ -196,9 +224,9 @@ def _row_ids(rows: list, key: str) -> list:
 def build_query_log_record(
     *,
     query: str,
-    plan: RetrievalPlan | None,
-    visual_grounding: VisualGroundingResult | None,
-    results: RetrievalResults | None,
+    plan: "RetrievalPlan | None",
+    visual_grounding: "VisualGroundingResult | None",
+    results: "RetrievalResults | None",
     answer: str | None,
     error: str | None,
     timings: dict[str, float | None],
@@ -207,6 +235,8 @@ def build_query_log_record(
     no_grounding: bool,
     vlm_provider: str | None,
     vlm_model: str | None,
+    planner_raw_response: str | None = None,
+    answer_prompt: str | None = None,
 ) -> QueryLogRecord:
     """Assemble a QueryLogRecord from the (possibly partial) pipeline artifacts."""
     memory_id, timestamp_local, _ = make_memory_id()
@@ -217,6 +247,9 @@ def build_query_log_record(
     counts: dict | None = None
     ids: dict | None = None
     frame_paths: list | None = None
+    retrieval_trace: list | None = None
+    extra: dict = {"expanded": expanded}
+
     if results is not None:
         counts = {
             "daily_summaries": len(results.daily_summaries),
@@ -232,6 +265,35 @@ def build_query_log_record(
             "active_query_memories": _row_ids(results.active_queries, "active_query_id"),
         }
         frame_paths = list(results.frame_paths)
+
+        # Per-store retrieval trace (StoreTrace dataclasses → plain dicts)
+        trace = getattr(results, "trace", None)
+        if trace:
+            retrieval_trace = [
+                {
+                    "store": t.store,
+                    "method": t.method,
+                    "candidate_count": t.candidate_count,
+                    "sql": t.sql,
+                    "params": t.params,
+                    "final_count": t.final_count,
+                    "note": t.note,
+                }
+                for t in trace
+            ]
+            # Quick summary fields for SQL filtering
+            vector_used = any(t["method"] == "vector" for t in retrieval_trace)
+            stores_empty_despite_candidates = [
+                t["store"]
+                for t in retrieval_trace
+                if t["method"] == "vector"
+                and t.get("candidate_count") is not None
+                and t["candidate_count"] > 0
+                and t["final_count"] == 0
+            ]
+            extra["vector_used"] = vector_used
+            if stores_empty_despite_candidates:
+                extra["stores_selected_but_empty"] = stores_empty_despite_candidates
 
     return QueryLogRecord(
         query_log_id=f"qlog_{memory_id}",
@@ -264,5 +326,8 @@ def build_query_log_record(
         vlm_provider=vlm_provider,
         vlm_model=vlm_model,
         created_at_utc=_now_utc_iso(),
-        extra_json=None,
+        extra_json=_dump(extra),
+        planner_raw_response=planner_raw_response,
+        retrieval_trace_json=_dump(retrieval_trace),
+        answer_prompt=answer_prompt,
     )

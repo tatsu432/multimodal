@@ -44,8 +44,8 @@ uv run python -m src.run_all                # both together
 uv run python -m src.run_all --no-passive   # QA only (same as src.main)
 uv run python -m src.passive_observer       # passive only
 uv run python -m src.ltm_query              # long-term memory query REPL
-uv run python -m src.embed_index            # backfill ChromaDB vector index (new rows)
-uv run python -m src.embed_index --force    # re-embed all rows (after model switch)
+uv run python -m src.embed_index            # embed rows missing from current model's collection
+uv run python -m src.embed_index --force    # re-embed all rows (full rebuild for current model)
 ```
 
 Each package reads config from its local `.env` (copy from `.env.example` and set `OPENAI_API_KEY`).
@@ -113,10 +113,13 @@ tail -n 1 memory_log/outputs/memories.jsonl | jq .
 
 Legacy records may contain `summary`/`objects`/`privacy_risk` (old two-call format). Current format uses `model_answer` and `frame_paths`.
 
-LTM queries are logged to a **separate** `outputs/long_term_query_logs.sqlite` (one row per query with plan, retrieved counts, answer, per-stage latency). This DB is **excluded from memory retrieval** — it is observability/eval telemetry only.
+LTM queries are logged to a **separate** `outputs/long_term_query_logs.sqlite` (one row per query). This DB is **excluded from memory retrieval** — it is observability/eval telemetry only. Each row now captures full per-stage I/O: `planner_raw_response` (raw LLM output), `retrieval_trace_json` (per-store method/candidates/SQL/final-count/drop-note), `answer_prompt` (exact evidence prompt), `extra_json` (quick-filter summary with `vector_used` and `stores_selected_but_empty`).
 
 ```bash
+# Recent queries with latency
 sqlite3 memory_log/outputs/long_term_query_logs.sqlite "SELECT user_query, intent, latency_total_ms FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 5;"
+# Debug a silent retrieval failure (vector candidates dropped by SQL filter)
+sqlite3 memory_log/outputs/long_term_query_logs.sqlite "SELECT retrieval_trace_json FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 1;" | jq .
 ```
 
 Vector index is stored in `outputs/chroma/` (model-namespaced ChromaDB collections). Backfill or reindex with:

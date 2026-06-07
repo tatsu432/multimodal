@@ -6,20 +6,29 @@ Usage:
     uv run python -m src.embed_index --force            # re-embed all rows
     uv run python -m src.embed_index --store promoted_events  # one store only
 
-This is idempotent: without --force it skips rows where ``text_embedding_id`` is already
-set. After a successful embed, each row's ``text_embedding_id`` is updated with the ChromaDB
-doc id (which equals the row primary key).
+Incremental mode (default) skips rows already present in the CURRENT model's ChromaDB
+collection (checked via ``vector_index.existing_ids``), not by ``text_embedding_id``.
+This means switching ``EMBEDDING_PROVIDER`` or ``EMBEDDING_MODEL`` and re-running will
+automatically populate the new model's collection without touching the old one.
+Switching back is instant — the previous collection still holds its docs.
 
-Run this after switching embedding models to rebuild the model-namespaced collections.
+``text_embedding_id`` is still written after each upsert as a best-effort breadcrumb,
+but it is NOT used to decide which rows to (re-)embed.
+
+This is idempotent: re-running without --force never re-embeds rows that are already in
+the collection.  After a model switch, run this (or let the LTM-query REPL auto-backfill)
+to populate the new model-namespaced collection.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
@@ -27,6 +36,9 @@ from src.config import PROJECT_ROOT, Config
 from src.embeddings import create_embedding_client
 from src.memory_db import open_db
 from src.vector_index import ChromaVectorIndex
+
+if TYPE_CHECKING:
+    from src.embeddings import EmbeddingClient
 
 logger = logging.getLogger("memory_log.embed_index")
 
@@ -65,31 +77,21 @@ def _ts_to_epoch(ts: str | None) -> float:
         return 0.0
 
 
-def _index_store(
-    conn,
-    emb_client,
+def _embed_batch(
+    conn: sqlite3.Connection,
+    emb_client: "EmbeddingClient",
     vector_index: ChromaVectorIndex,
     store: str,
-    force: bool,
-) -> tuple[int, int]:
-    """Embed and upsert rows for *store*. Returns (total_eligible, indexed_count)."""
+    rows: list,
+) -> int:
+    """Embed and upsert *rows* for *store*. Returns count of successfully indexed rows."""
     cfg = _STORE_CONFIG[store]
     pk_col = cfg["pk_col"]
     ts_col = cfg["ts_col"]
     has_location = cfg["has_location"]
-
-    where_clause = "semantic_search_text IS NOT NULL AND semantic_search_text != ''"
-    if not force:
-        where_clause += f" AND text_embedding_id IS NULL"
-
-    rows = conn.execute(
-        f"SELECT * FROM {store} WHERE {where_clause}"
-    ).fetchall()
-
-    total = len(rows)
     indexed = 0
 
-    for i in range(0, total, _BATCH_SIZE):
+    for i in range(0, len(rows), _BATCH_SIZE):
         batch = rows[i : i + _BATCH_SIZE]
         texts = [r["semantic_search_text"] for r in batch]
         try:
@@ -111,6 +113,7 @@ def _index_store(
                     metadata["lon"] = float(lon)
             try:
                 vector_index.upsert(store, pk, vec, metadata)
+                # Best-effort breadcrumb — the Chroma collection is the source of truth
                 conn.execute(
                     f"UPDATE {store} SET text_embedding_id = ? WHERE {pk_col} = ?",
                     (pk, pk),
@@ -120,10 +123,61 @@ def _index_store(
                 logger.warning("Could not upsert %s/%s: %s", store, pk, exc)
 
         conn.commit()
-        progress = min(i + _BATCH_SIZE, total)
-        print(f"  {store}: {progress}/{total} processed, {indexed} indexed so far")
+        progress = min(i + _BATCH_SIZE, len(rows))
+        print(f"  {store}: {progress}/{len(rows)} processed, {indexed} indexed so far")
 
-    return total, indexed
+    return indexed
+
+
+def reconcile_model_index(
+    conn: sqlite3.Connection,
+    emb_client: "EmbeddingClient",
+    vector_index: ChromaVectorIndex,
+    stores: list[str] | None = None,
+    force: bool = False,
+) -> dict[str, tuple[int, int]]:
+    """Embed SQLite rows that are missing from the current model's ChromaDB collection.
+
+    For each store in *stores* (default: all three), fetches the set of doc ids already
+    present in the Chroma collection for this model, then embeds only the missing rows.
+    With ``force=True``, re-embeds all eligible rows (useful after a full model switch or
+    data correction).
+
+    Returns a dict mapping store name → (total_eligible, indexed_count).
+
+    This function is idempotent and safe to call on every startup: when the current model's
+    collection is already fully populated it performs 3 cheap ``get`` calls and returns.
+    """
+    stores = stores or _ALL_STORES
+    results: dict[str, tuple[int, int]] = {}
+
+    for store in stores:
+        cfg = _STORE_CONFIG[store]
+        pk_col = cfg["pk_col"]
+
+        # Fetch all rows with embeddable text
+        rows = conn.execute(
+            f"SELECT * FROM {store} "
+            "WHERE semantic_search_text IS NOT NULL AND semantic_search_text != ''"
+        ).fetchall()
+        total = len(rows)
+
+        if not force:
+            existing = vector_index.existing_ids(store)
+            rows = [r for r in rows if r[pk_col] not in existing]
+
+        if not rows:
+            print(f"  {store}: 0/{total} to embed (already up to date)")
+            results[store] = (total, 0)
+            continue
+
+        action = "force re-embed" if force else f"{len(rows)} missing"
+        print(f"\nIndexing {store} ({action} of {total} eligible rows)…")
+        indexed = _embed_batch(conn, emb_client, vector_index, store, rows)
+        print(f"  {store}: {indexed}/{len(rows)} rows indexed")
+        results[store] = (total, indexed)
+
+    return results
 
 
 def main() -> None:
@@ -137,7 +191,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Backfill ChromaDB vector index from existing SQLite memory rows. "
-            "Skips already-indexed rows unless --force is given."
+            "Skips rows already in the current model's collection unless --force is given."
         )
     )
     parser.add_argument(
@@ -149,7 +203,7 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-embed all rows, even those already indexed.",
+        help="Re-embed all rows, even those already in the collection.",
     )
     args = parser.parse_args()
 
@@ -181,18 +235,14 @@ def main() -> None:
         print(f"Could not open memory DB: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    stores_to_run = [args.store] if args.store else _ALL_STORES
-    grand_total = 0
-    grand_indexed = 0
+    stores_to_run = [args.store] if args.store else None
+    results = reconcile_model_index(conn, emb_client, vector_index, stores=stores_to_run, force=args.force)
 
-    for store in stores_to_run:
-        print(f"\nIndexing {store} ({'force re-embed' if args.force else 'new rows only'})…")
-        total, indexed = _index_store(conn, emb_client, vector_index, store, force=args.force)
-        print(f"  {store}: {indexed}/{total} rows indexed")
-        grand_total += total
-        grand_indexed += indexed
+    grand_total = sum(t for t, _i in results.values())
+    grand_indexed = sum(i for _t, i in results.values())
+    stores_run = list(results.keys())
 
-    print(f"\nDone. {grand_indexed}/{grand_total} rows indexed across {len(stores_to_run)} store(s).")
+    print(f"\nDone. {grand_indexed}/{grand_total} rows indexed across {len(stores_run)} store(s).")
     print(
         f"Verify: sqlite3 {config.memory_db_path} "
         '"SELECT count(*) FROM promoted_events WHERE text_embedding_id IS NOT NULL;"'

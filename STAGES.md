@@ -358,8 +358,11 @@ cd memory_log && uv run python -m src.ltm_query --no-grounding
 ```
 
 Each query is logged to `outputs/long_term_query_logs.sqlite` (a **separate** file, never
-touched by retrieval): plan JSON, retrieved counts + row IDs, answer, per-stage latency,
-error field. Disable with `LTM_QUERY_LOG_ENABLED=false` in `.env`.
+touched by retrieval): plan JSON + raw LLM response, per-store retrieval trace
+(method/candidates/SQL/final-count/drop note), exact answer-generator prompt, answer,
+per-stage latency, error. `extra_json.stores_selected_but_empty` flags stores where vector
+search found candidates that were eliminated by SQL time/location filters.
+Disable with `LTM_QUERY_LOG_ENABLED=false` in `.env`.
 
 Example queries:
 - "Where was I yesterday?"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 
 from src.config import Config
 
@@ -18,15 +18,18 @@ Given the user's question about their past visual memories, return a JSON retrie
 Current local time: {current_time}
 Timezone offset: {timezone_offset}
 
+IMPORTANT — the three top-level filter fields are INDEPENDENT and can all be set at once.
+They are combined with AND logic: results must satisfy every active filter.
+- time_range: set whenever the query mentions any time period (yesterday, last week, at 3pm, etc.)
+- location_filter: set whenever the query mentions a place or location (requires known lat/lon)
+- semantic_query: set whenever the query asks about specific content, objects, or events
+
 Available memory stores:
-- daily_summaries: high-level day summaries (method: date_lookup or semantic_search)
-- passive_observations: raw time/location traces every ~30s, no visual analysis \
-(method: time_range or location_radius)
-- promoted_events: semantic visual events with scene descriptions \
-(method: time_range, semantic_search, or location_radius)
-- active_query_memories: past user Q&A interactions with the camera \
-(method: time_range or semantic_search)
-- frames: frame images linked to events (method: by_event)
+- daily_summaries: high-level day summaries; searched by time_range and/or semantic_query
+- passive_observations: raw location traces every ~30s; searched by time_range and/or location_filter (no semantic search)
+- promoted_events: semantic visual events with scene descriptions; searched by any combination of time_range, location_filter, semantic_query
+- active_query_memories: past user Q&A interactions; searched by any combination of time_range, semantic_query
+- frames: frame images linked to promoted_events; include when visual details are needed
 
 Intents:
 - whereabouts: "where was I", "which location", "was I near"
@@ -40,23 +43,26 @@ Return ONLY valid JSON — no markdown, no explanation:
   "intent": "<intent>",
   "time_range": {"start_utc": "<ISO8601>", "end_utc": "<ISO8601>"} or null,
   "location_filter": {"lat": <float>, "lon": <float>, "radius_m": <float>} or null,
-  "semantic_query": "<keywords>" or null,
+  "semantic_query": "<descriptive keywords for semantic search>" or null,
   "needs_current_visual_grounding": <bool>,
   "needs_retrieved_frames": <bool>,
   "stores_to_query": [
-    {"store": "<store>", "method": "<method>", "top_k": <int or null>, "max_records": <int or null>}
+    {"store": "<store>", "top_k": <int or null>, "max_records": <int or null>}
   ]
 }
 
 Rules:
-- Set needs_current_visual_grounding=true if the query contains words like: \
+- Set needs_current_visual_grounding=true for queries with: \
 this, here, that, these, current, now, looking at, this object, this room, this place.
-- For "yesterday", compute start/end from current local time.
+- For "yesterday", compute start/end from current local time (midnight to midnight).
 - For whereabouts intent, always include passive_observations and daily_summaries.
 - For visual_recall, include promoted_events; set needs_retrieved_frames=true when \
 the user asks for visual details.
 - For interaction_recall, include active_query_memories.
-- Prefer metadata filters (time_range, location_radius) over semantic_search.
+- Combine filters freely: "what did I see at the park yesterday" → set time_range AND \
+semantic_query (AND location_filter if coordinates are known).
+- passive_observations has no semantic search — only time_range and location_filter apply.
+- When a query has both time and content aspects, set both time_range and semantic_query.
 """
 
 _FALLBACK_PLAN_JSON = """{
@@ -67,8 +73,8 @@ _FALLBACK_PLAN_JSON = """{
   "needs_current_visual_grounding": false,
   "needs_retrieved_frames": false,
   "stores_to_query": [
-    {"store": "promoted_events", "method": "semantic_search", "top_k": 10, "max_records": null},
-    {"store": "active_query_memories", "method": "semantic_search", "top_k": 5, "max_records": null}
+    {"store": "promoted_events", "top_k": 10, "max_records": null},
+    {"store": "active_query_memories", "top_k": 5, "max_records": null}
   ]
 }"""
 
@@ -112,7 +118,7 @@ def _parse_plan(raw: str) -> RetrievalPlan:
     stores = [
         StoreQuery(
             store=s["store"],
-            method=s["method"],
+            method=s.get("method", "auto"),
             top_k=s.get("top_k"),
             max_records=s.get("max_records"),
         )
@@ -138,25 +144,32 @@ def _fallback_plan(query: str) -> RetrievalPlan:
 class QueryPlanner:
     def __init__(self, config: Config) -> None:
         self._config = config
+        self.last_raw_response: str | None = None  # set each plan() call for telemetry
 
     def plan(self, query: str) -> RetrievalPlan:
         now = datetime.now().astimezone()
         tz_offset = now.strftime("%z")  # e.g. +0900
         current_time = now.strftime("%Y-%m-%dT%H:%M:%S") + tz_offset
 
-        system_prompt = (
-            _PLANNER_SYSTEM_PROMPT
-            .replace("{current_time}", current_time)
-            .replace("{timezone_offset}", tz_offset)
-        )
+        system_prompt = _PLANNER_SYSTEM_PROMPT.replace(
+            "{current_time}", current_time
+        ).replace("{timezone_offset}", tz_offset)
 
+        self.last_raw_response = None
         raw: str | None = None
         try:
             raw = self._call_llm(system_prompt, query)
+            self.last_raw_response = raw
             plan = _parse_plan(raw)
-            logger.debug("Query plan parsed: intent=%s stores=%s", plan.intent, [s.store for s in plan.stores_to_query])
+            logger.info(
+                "Query plan: intent=%s semantic_query=%r stores=%s",
+                plan.intent,
+                plan.semantic_query,
+                [s.store for s in plan.stores_to_query],
+            )
             return plan
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            self.last_raw_response = raw  # preserve even on parse failure
             logger.warning("Plan parse error (%s); raw=%r; using fallback", exc, raw)
             return _fallback_plan(query)
 

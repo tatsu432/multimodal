@@ -93,6 +93,7 @@ class Config:
     embedding_provider: str
     embedding_model: str
     embed_on_write: bool
+    embed_auto_backfill: bool
     chroma_path: Path
     embedding_timeout_sec: float
 
@@ -253,6 +254,7 @@ class Config:
             embedding_provider=_emb_provider,
             embedding_model=_emb_model,
             embed_on_write=parse_bool_env(os.getenv("EMBED_ON_WRITE", "true")),
+            embed_auto_backfill=parse_bool_env(os.getenv("EMBED_AUTO_BACKFILL", "true")),
             chroma_path=chroma_path,
             embedding_timeout_sec=float(os.getenv("EMBEDDING_TIMEOUT_SEC", "30")),
         )

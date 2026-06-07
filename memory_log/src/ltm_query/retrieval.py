@@ -17,6 +17,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("memory_log.ltm_query.retrieval")
 
+
+@dataclass
+class StoreTrace:
+    """Per-store retrieval audit record — captured inside RetrievalResults.trace."""
+
+    store: str
+    method: str  # "vector" | "like" | "metadata"
+    candidate_count: int | None  # ChromaDB candidates before SQL filter; None when LIKE/metadata
+    sql: str
+    params: list
+    final_count: int
+    note: str | None = None  # set when vector candidates were dropped by SQL filter
+
 # ~1 degree latitude ≈ 111 km
 _KM_PER_DEG_LAT = 111.0
 
@@ -66,6 +79,7 @@ class RetrievalResults:
     promoted_events: list[sqlite3.Row] = field(default_factory=list)
     active_queries: list[sqlite3.Row] = field(default_factory=list)
     frame_paths: list[str] = field(default_factory=list)
+    trace: list[StoreTrace] = field(default_factory=list)
 
 
 class MemoryRetriever:
@@ -89,6 +103,42 @@ class MemoryRetriever:
         for sq in plan.stores_to_query:
             self._execute_store_query(sq, plan, results)
         return results
+
+    def _append_trace(
+        self,
+        results: RetrievalResults,
+        store: str,
+        method: str,
+        sql: str,
+        params: list,
+        final_count: int,
+        candidate_count: int | None = None,
+    ) -> None:
+        """Record one StoreTrace and emit an INFO log line for the live file trace."""
+        note: str | None = None
+        if method == "vector" and candidate_count is not None and candidate_count > 0 and final_count == 0:
+            note = f"{candidate_count} vector candidates excluded by time_range/location filter"
+
+        results.trace.append(StoreTrace(
+            store=store,
+            method=method,
+            candidate_count=candidate_count,
+            sql=sql,
+            params=params,
+            final_count=final_count,
+            note=note,
+        ))
+
+        # Channel 2: readable live trace in the app-log file (off-terminal)
+        if candidate_count is not None:
+            cand_str = f"candidates={candidate_count} → rows={final_count}"
+        else:
+            cand_str = f"rows={final_count}"
+        msg = f"%s method=%s %s"
+        if note:
+            logger.info(msg + " NOTE: %s", store, method, cand_str, note)
+        else:
+            logger.info(msg, store, method, cand_str)
 
     def _get_query_vec(self, query: str) -> list[float] | None:
         """Embed *query* and memoize within the current retrieve() call."""
@@ -124,6 +174,18 @@ class MemoryRetriever:
         ):
             return None
 
+        # Check before embedding the query — avoids a wasted round-trip when the
+        # collection for the current model has never been populated (e.g. after
+        # switching EMBEDDING_PROVIDER without re-indexing).
+        if self._vector_index.count(owner_table) == 0:
+            logger.warning(
+                "Vector collection for '%s' is empty — model not yet indexed? "
+                "Run `uv run python -m src.embed_index` or set EMBED_AUTO_BACKFILL=true. "
+                "Falling back to LIKE keyword search.",
+                owner_table,
+            )
+            return None
+
         query_vec = self._get_query_vec(plan.semantic_query)
         if query_vec is None:
             return None
@@ -149,19 +211,21 @@ class MemoryRetriever:
     ) -> None:
         store = sq.store
         if store == "daily_summaries":
-            results.daily_summaries = self._query_daily_summaries(sq, plan)
+            results.daily_summaries = self._query_daily_summaries(sq, plan, results)
         elif store == "passive_observations":
-            results.passive_rows = self._query_passive_observations(sq, plan)
+            results.passive_rows = self._query_passive_observations(sq, plan, results)
         elif store == "promoted_events":
-            results.promoted_events = self._query_promoted_events(sq, plan)
+            results.promoted_events = self._query_promoted_events(sq, plan, results)
         elif store == "active_query_memories":
-            results.active_queries = self._query_active_queries(sq, plan)
+            results.active_queries = self._query_active_queries(sq, plan, results)
         elif store == "frames":
             results.frame_paths = self._query_frames(results.promoted_events)
         else:
             logger.warning("Unknown store in plan: %r", store)
 
-    def _query_daily_summaries(self, sq: StoreQuery, plan: RetrievalPlan) -> list[sqlite3.Row]:
+    def _query_daily_summaries(
+        self, sq: StoreQuery, plan: RetrievalPlan, results: RetrievalResults
+    ) -> list[sqlite3.Row]:
         limit = sq.top_k or 3
         candidate_ids = self._semantic_candidate_ids("daily_summaries", plan, limit * 4)
 
@@ -174,7 +238,8 @@ class MemoryRetriever:
 
         if candidate_ids is not None:
             if not candidate_ids:
-                logger.debug("daily_summaries: 0 rows (vector search empty)")
+                sql = "SELECT * FROM daily_summaries WHERE 1=0"
+                self._append_trace(results, "daily_summaries", "vector", sql, [], 0, candidate_count=0)
                 return []
             placeholders = ",".join("?" * len(candidate_ids))
             conditions.append(f"summary_id IN ({placeholders})")
@@ -185,6 +250,7 @@ class MemoryRetriever:
             id_order = {oid: i for i, oid in enumerate(candidate_ids)}
             rows = sorted(rows, key=lambda r: id_order.get(r["summary_id"], len(candidate_ids)))
             rows = rows[:limit]
+            self._append_trace(results, "daily_summaries", "vector", sql, list(params), len(rows), candidate_count=len(candidate_ids))
         else:
             if plan.semantic_query:
                 keywords = plan.semantic_query.split()[:5]
@@ -192,13 +258,16 @@ class MemoryRetriever:
                 conditions.append(kw_sql)
                 params.extend(kw_params)
             where = " AND ".join(conditions) if conditions else "1=1"
+            method = "like" if plan.semantic_query else "metadata"
             sql = f"SELECT * FROM daily_summaries WHERE {where} ORDER BY date_local DESC LIMIT ?"
             rows = self._conn.execute(sql, params + [limit]).fetchall()
+            self._append_trace(results, "daily_summaries", method, sql, list(params) + [limit], len(rows))
 
-        logger.debug("daily_summaries: %d rows", len(rows))
         return rows
 
-    def _query_passive_observations(self, sq: StoreQuery, plan: RetrievalPlan) -> list[sqlite3.Row]:
+    def _query_passive_observations(
+        self, sq: StoreQuery, plan: RetrievalPlan, results: RetrievalResults
+    ) -> list[sqlite3.Row]:
         conditions: list[str] = []
         params: list = []
 
@@ -214,10 +283,12 @@ class MemoryRetriever:
         limit = sq.max_records or self._config.ltm_max_passive_rows
         sql = f"SELECT * FROM passive_observations WHERE {where} ORDER BY timestamp_utc ASC LIMIT ?"
         rows = self._conn.execute(sql, params + [limit]).fetchall()
-        logger.debug("passive_observations: %d rows", len(rows))
+        self._append_trace(results, "passive_observations", "metadata", sql, list(params) + [limit], len(rows))
         return rows
 
-    def _query_promoted_events(self, sq: StoreQuery, plan: RetrievalPlan) -> list[sqlite3.Row]:
+    def _query_promoted_events(
+        self, sq: StoreQuery, plan: RetrievalPlan, results: RetrievalResults
+    ) -> list[sqlite3.Row]:
         limit = sq.top_k or self._config.ltm_promoted_event_top_k
         candidate_ids = self._semantic_candidate_ids("promoted_events", plan, limit * 4)
 
@@ -238,7 +309,8 @@ class MemoryRetriever:
 
         if candidate_ids is not None:
             if not candidate_ids:
-                logger.debug("promoted_events: 0 rows (vector search empty)")
+                sql = "SELECT * FROM promoted_events WHERE 1=0"
+                self._append_trace(results, "promoted_events", "vector", sql, [], 0, candidate_count=0)
                 return []
             placeholders = ",".join("?" * len(candidate_ids))
             conditions.append(f"event_id IN ({placeholders})")
@@ -249,6 +321,7 @@ class MemoryRetriever:
             id_order = {oid: i for i, oid in enumerate(candidate_ids)}
             rows = sorted(rows, key=lambda r: id_order.get(r["event_id"], len(candidate_ids)))
             rows = rows[:limit]
+            self._append_trace(results, "promoted_events", "vector", sql, list(params), len(rows), candidate_count=len(candidate_ids))
         else:
             if plan.semantic_query:
                 keywords = plan.semantic_query.split()[:6]
@@ -257,13 +330,16 @@ class MemoryRetriever:
                     conditions.append(kw_sql)
                     params.extend(kw_params)
             where = " AND ".join(conditions) if conditions else "1=1"
+            method = "like" if plan.semantic_query else "metadata"
             sql = f"SELECT * FROM promoted_events WHERE {where} ORDER BY start_ts_utc DESC LIMIT ?"
             rows = self._conn.execute(sql, params + [limit]).fetchall()
+            self._append_trace(results, "promoted_events", method, sql, list(params) + [limit], len(rows))
 
-        logger.debug("promoted_events: %d rows", len(rows))
         return rows
 
-    def _query_active_queries(self, sq: StoreQuery, plan: RetrievalPlan) -> list[sqlite3.Row]:
+    def _query_active_queries(
+        self, sq: StoreQuery, plan: RetrievalPlan, results: RetrievalResults
+    ) -> list[sqlite3.Row]:
         limit = sq.top_k or self._config.ltm_active_query_top_k
         candidate_ids = self._semantic_candidate_ids("active_query_memories", plan, limit * 4)
 
@@ -280,7 +356,8 @@ class MemoryRetriever:
 
         if candidate_ids is not None:
             if not candidate_ids:
-                logger.debug("active_query_memories: 0 rows (vector search empty)")
+                sql = "SELECT * FROM active_query_memories WHERE 1=0"
+                self._append_trace(results, "active_query_memories", "vector", sql, [], 0, candidate_count=0)
                 return []
             placeholders = ",".join("?" * len(candidate_ids))
             conditions.append(f"active_query_id IN ({placeholders})")
@@ -291,6 +368,7 @@ class MemoryRetriever:
             id_order = {oid: i for i, oid in enumerate(candidate_ids)}
             rows = sorted(rows, key=lambda r: id_order.get(r["active_query_id"], len(candidate_ids)))
             rows = rows[:limit]
+            self._append_trace(results, "active_query_memories", "vector", sql, list(params), len(rows), candidate_count=len(candidate_ids))
         else:
             if plan.semantic_query:
                 keywords = plan.semantic_query.split()[:6]
@@ -302,10 +380,11 @@ class MemoryRetriever:
                     params.extend(kw_params)
                 conditions.append("(" + " OR ".join(all_kw_conditions) + ")")
             where = " AND ".join(conditions) if conditions else "1=1"
+            method = "like" if plan.semantic_query else "metadata"
             sql = f"SELECT * FROM active_query_memories WHERE {where} ORDER BY timestamp_utc DESC LIMIT ?"
             rows = self._conn.execute(sql, params + [limit]).fetchall()
+            self._append_trace(results, "active_query_memories", method, sql, list(params) + [limit], len(rows))
 
-        logger.debug("active_query_memories: %d rows", len(rows))
         return rows
 
     def _query_frames(self, promoted_events: list[sqlite3.Row]) -> list[str]:
