@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# .claude
+.claude/tasks/
+
 # data
 *.jpg
 sampled_frames/
