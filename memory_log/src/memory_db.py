@@ -209,6 +209,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     # WAL mode: readers do not block writers; multiple processes can write safely
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     _init_schema(conn)
     return conn

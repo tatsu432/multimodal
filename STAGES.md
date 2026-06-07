@@ -33,14 +33,16 @@ capture/ (shared stream config + ring buffer)
         ↓
 VLM inference (OpenAI or Ollama)
         ↓
-[vlm_smoke]       live Q&A only
-[memory_log]      Q&A + JSONL + SQLite (active_query_memories + promoted_events + frames)
+[vlm_smoke]        live Q&A only
+[memory_log]       Q&A + JSONL + SQLite (active_query_memories + promoted_events + frames)
 [passive_observer] periodic background logging → passive_observations table
+[run_all]          wearable "on" switch: live Q&A + passive observer in one process
+                   (shared camera · location server · lock-guarded DB writer)
         ↓
-[daily_summary]   LLM-compressed daily records → daily_summaries table
+[daily_summary]    LLM-compressed daily records → daily_summaries table
         ↓
-[ltm_query]       query planner → retrieval → evidence pack → grounded answer
-                  optional visual grounding for "this/here/current scene" queries
+[ltm_query]        query planner → retrieval → evidence pack → grounded answer
+                   optional visual grounding for "this/here/current scene" queries
 ```
 
 ---
@@ -59,6 +61,7 @@ VLM inference (OpenAI or Ollama)
 | Active query memories | **Done** — SQLite `active_query_memories` table, linked to events | [memory_log/README.md](memory_log/README.md) |
 | Daily summaries | **Done** — `src/daily_summary.py` LLM-compressed daily records | [memory_log/README.md](memory_log/README.md) |
 | Long-term memory query | **Done** — `src/ltm_query/` deterministic retrieval + grounded answering | [memory_log/README.md](memory_log/README.md) |
+| Unified runner | **Done** — `src/run_all.py` wearable "on" switch (live QA + passive, shared resources) | [memory_log/README.md](memory_log/README.md) |
 | Eval / API / UI | **Planned** — after core memory | (this file, Future work) |
 
 ---
@@ -386,5 +389,6 @@ After core memory layers exist:
 2. memory_log       — question-driven JSONL + SQLite active query memories
 3. passive_observer — background location/frame logging
 4. ltm_query        — long-term memory query CLI
-5. (TBD)           — eval, services, UI
+5. run_all          — combined wearable entry point (QA + passive in one process)
+6. (TBD)           — eval, services, UI
 ```

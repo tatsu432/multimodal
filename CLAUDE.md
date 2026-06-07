@@ -36,6 +36,13 @@ uv run python -m src.main
 # Phase 2 — question-driven JSONL memory
 cd memory_log
 uv run python -m src.main
+
+# Phase 2 (combined) — live QA + passive background memory (wearable "on" switch)
+cd memory_log
+uv run python -m src.run_all                # both together
+uv run python -m src.run_all --no-passive   # QA only (same as src.main)
+uv run python -m src.passive_observer       # passive only
+uv run python -m src.ltm_query              # long-term memory query REPL
 ```
 
 Each package reads config from its local `.env` (copy from `.env.example` and set `OPENAI_API_KEY`).

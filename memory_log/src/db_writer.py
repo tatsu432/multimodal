@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -82,6 +83,7 @@ class SQLiteWriter:
     def __init__(self, conn: sqlite3.Connection, project_root: Path) -> None:
         self._conn = conn
         self._project_root = project_root
+        self._lock = threading.Lock()
 
     def write_active_query_with_event(
         self,
@@ -120,7 +122,7 @@ class SQLiteWriter:
         else:
             saved_frame_paths = list(record.frame_paths)
 
-        with self._conn:
+        with self._lock, self._conn:
             # promoted_events
             self._conn.execute(
                 """
@@ -244,7 +246,7 @@ class SQLiteWriter:
     ) -> None:
         now_utc = _now_utc_iso()
         loc = _location_columns(location)
-        with self._conn:
+        with self._lock, self._conn:
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO passive_observations (
@@ -298,7 +300,7 @@ class SQLiteWriter:
         semantic_search_text: str | None = None,
     ) -> None:
         now_utc = _now_utc_iso()
-        with self._conn:
+        with self._lock, self._conn:
             self._conn.execute(
                 """
                 INSERT OR REPLACE INTO daily_summaries (

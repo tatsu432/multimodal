@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,26 +71,35 @@ class PassiveObserver:
         db_writer: SQLiteWriter,
         sidecar: LocationSidecarStore | None,
         geocode_client: GeocodeClient | None,
+        stop_event: threading.Event | None = None,
+        quiet: bool = False,
     ) -> None:
         self._config = config
         self._source = source
         self._db_writer = db_writer
         self._sidecar = sidecar
         self._geocode_client = geocode_client
+        self._stop = stop_event or threading.Event()
+        self._quiet = quiet
 
     def run(self) -> None:
         interval = self._config.passive_observation_interval_sec
-        print(f"\npassive_observer: logging every {interval:.0f}s. Ctrl+C to stop.")
-        print(f"Frame source: {self._config.frame_source_type}")
-        print(f"DB: {self._config.memory_db_path}\n")
+        if self._quiet:
+            logger.info(
+                "passive_observer: logging every %.0fs (embedded mode).", interval
+            )
+        else:
+            print(f"\npassive_observer: logging every {interval:.0f}s. Ctrl+C to stop.")
+            print(f"Frame source: {self._config.frame_source_type}")
+            print(f"DB: {self._config.memory_db_path}\n")
 
         observations_written = 0
         last_tick = time.monotonic() - interval  # fire immediately on first loop
 
-        while True:
+        while not self._stop.is_set():
             now = time.monotonic()
             if now - last_tick < interval:
-                time.sleep(0.5)
+                self._stop.wait(0.5)
                 continue
 
             last_tick = now
@@ -154,11 +164,15 @@ class PassiveObserver:
                 frame_timestamp=frame_ts_local,
                 phash=phash,
             )
-            print(
+            msg = (
                 f"[{timestamp_local[:19]}] obs #{count + 1} "
                 f"location={location.display_name()} "
                 f"phash={phash or 'n/a'}"
             )
+            if self._quiet:
+                logger.info(msg)
+            else:
+                print(msg)
         except Exception as exc:
             logger.error("Failed to write passive observation: %s", exc)
 
