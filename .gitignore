@@ -3,7 +3,7 @@
 
 # data
 *.jpg
-
+sampled_frames/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

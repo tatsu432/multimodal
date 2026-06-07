@@ -1,56 +1,145 @@
+# Project stages
+
+Roadmap for the wearable multimodal AI assistant. This file tracks **what is implemented** and **what is planned next**. For run instructions, see each package README.
+
+---
 
 ## Big picture architecture
 
 Eventually you want this:
 
 ```text
-Wearable / GoPro / phone camera
+Wearable / Tapo / phone camera
         ↓
-Streaming ingestion
+Streaming ingestion (RTSP / WebRTC via MediaMTX)
         ↓
-Frame sampler
+Frame sampler + ring buffer
         ↓
-VLM inference
+VLM inference (OpenAI or Ollama)
         ↓
-Structured scene/memory records
+Memory layers (passive observation → promoted events → daily summaries)
         ↓
-Long-term storage + vector DB
+Long-term memory query (retriever + answer generator)
         ↓
-Text QA over live view + past memory
-        ↓
-Evaluation + profiling + efficient inference research
+Evaluation + service separation + UI
 ```
 
-Your current prototype already covers:
+**What works today:**
 
 ```text
-GoPro RTMP → OpenCV → latest frames → VLM answers text question
+Tapo RTSP / phone WebRTC (MediaMTX) / webcam / video file
+        ↓
+capture/ (shared stream config + ring buffer)
+        ↓
+VLM inference (OpenAI or Ollama)
+        ↓
+[vlm_smoke] live Q&A only
+[memory_log] Q&A + JSONL memory records (+ location / geocode)
+        ↓
+(future) passive observation → promoted events → daily summaries → LTM query
 ```
-
-So now we gradually add **memory, retrieval, metadata, evaluation, and efficiency**.
 
 ---
 
-# Phase 1 — `vlm_smoke`: stabilize live visual QA
+## Current status
 
-Goal: make the current prototype reliable and reproducible.
+| Package / module | Status | README |
+| ---------------- | ------ | ------ |
+| `camera_test/` | **Done** — stream validation harness | [camera_test/README.md](camera_test/README.md) |
+| `capture/` | **Done** — shared camera ingestion | (root package, see below) |
+| `providers/` | **Done** — shared Ollama client | (root package, see below) |
+| `vlm_smoke/` | **Done** — live visual QA | [vlm_smoke/README.md](vlm_smoke/README.md) |
+| `memory_log/` | **Done** — question-driven JSONL memories | [memory_log/README.md](memory_log/README.md) |
+| Memory layers + LTM query | **Planned** — details TBD | (this file, Future work) |
+| Eval / API / UI | **Planned** — after core memory | (this file, Future work) |
 
-You already have the raw version. Now clean it up.
+---
 
-### Features
+## Shared infrastructure
 
-Add:
+Not a separate phase — shared code used by `vlm_smoke` and `memory_log`.
+
+| Module | Role |
+| ------ | ---- |
+| [`capture/`](capture/) | Camera presets (`tapo-rtsp`, `tapo-webrtc`, `phone-webrtc`), RTSP tuning, threaded ring buffer ([`camera_frame_source.py`](capture/camera_frame_source.py), [`stream_config.py`](capture/stream_config.py)) |
+| [`providers/ollama.py`](providers/ollama.py) | Shared local Ollama HTTP client |
+| Root [`pyproject.toml`](pyproject.toml) | Publishes `capture` + `providers` as the `multimodal` package |
+
+`camera_test/stream_config.py` re-exports `capture.stream_config`. MediaMTX configs and TLS certs live under [`camera_test/`](camera_test/) and are shared across packages.
+
+---
+
+# Phase 0 — `camera_test`: validate camera streams
+
+**Status: implemented**
+
+Goal: confirm live video ingestion works before using `vlm_smoke` or `memory_log`.
+
+### Supported sources
+
+| `CAMERA_SOURCE` | Camera | Path |
+| --------------- | ------ | ---- |
+| `tapo-rtsp` | Tapo IP camera | RTSP direct → OpenCV |
+| `tapo-webrtc` | Tapo IP camera | RTSP → MediaMTX → WHEP / RTSP relay |
+| `phone-webrtc` | Smartphone | WebRTC publish → MediaMTX → RTSP relay |
+
+### Suggested workflow
 
 ```text
-- RTMP stream reader
-- frame buffer
-- text question input
-- VLM inference on latest frame / recent frames
-- basic logging
-- config file
+camera-preview  → confirm source works
+camera-sample   → confirm frames save correctly
+camera-vlm      → test VLM on live video
 ```
 
-### Folder
+For production-style flows (config, logging, memory), use `vlm_smoke/` and `memory_log/`.
+
+### Folder layout
+
+```text
+camera_test/
+├── preview_stream.py, frame_sample.py, live_vlm_qa.py
+├── stream_config.py          # re-exports capture/
+├── whep_client.py, whep_worker.py, whep_probe.py
+├── mediamtx-*.example.yml    # copy to local gitignored yml
+└── phone_location.html       # GPS sidecar page for memory_log
+```
+
+MediaMTX setup, phone TLS (mkcert), and troubleshooting: see [camera_test/README.md](camera_test/README.md).
+
+### Success criteria
+
+- `uv run camera-preview` shows a live window (or headless read succeeds)
+- `uv run camera-sample` saves JPEGs under `sampled_frames/`
+- `uv run camera-vlm` answers text questions in a REPL
+
+---
+
+# Phase 1 — `vlm_smoke`: live visual QA
+
+**Status: implemented**
+
+Goal: stable, reproducible live visual question-answering over a frame stream.
+
+### What it does
+
+- Background thread samples frames into a ring buffer (`FRAME_BUFFER_SIZE`, `CAPTURE_SAMPLE_INTERVAL_SEC`)
+- Terminal REPL accepts text questions
+- Sends the latest N frames (`NUM_FRAMES_PER_QUERY`) to OpenAI or Ollama vision models
+- Logs capture health, VLM latency, and optionally saves queried frames under `outputs/sampled_frames/`
+
+### Frame sources
+
+Set `FRAME_SOURCE_TYPE` in `.env`:
+
+| Type | Use |
+| ---- | --- |
+| `camera` | Tapo RTSP, Tapo/MediaMTX relay, or phone WebRTC — same presets as `camera_test` |
+| `webcam` | Local webcam (`WEBCAM_INDEX`) |
+| `video` | Looping video file (`VIDEO_PATH`) for smoke tests without a camera |
+
+Uses shared [`capture/`](capture/) for camera presets. Direct Tapo RTSP (`tapo-rtsp`) is the lowest-latency option on LAN.
+
+### Folder layout
 
 ```text
 vlm_smoke/
@@ -58,632 +147,207 @@ vlm_smoke/
 ├── pyproject.toml
 ├── .env.example
 ├── src/
-│   ├── main.py
+│   ├── main.py          # REPL entrypoint
 │   ├── config.py
-│   ├── frame_source.py
+│   ├── frame_source.py  # camera / webcam / video
 │   ├── vlm_client.py
 │   └── utils.py
 └── outputs/
     └── sampled_frames/
 ```
 
-### What to implement
-
-Abstract the frame source now:
-
-```python
-class FrameSource:
-    def read(self):
-        ...
-```
-
-Then implement:
-
-```text
-RTMPFrameSource
-WebcamFrameSource
-VideoFileFrameSource
-```
-
-Even if you only use RTMP now, this abstraction will save you later.
+Full setup (MediaMTX, phone publish, Ollama): [vlm_smoke/README.md](vlm_smoke/README.md).
 
 ### Success criteria
 
-You should be able to run:
-
 ```bash
+cd vlm_smoke
 uv run python -m src.main
 ```
 
-Then ask:
+Example questions:
 
 ```text
 What do you see?
 Is there a person?
 What object is closest to the camera?
+What text is visible?
 ```
 
-and get reasonable answers.
+### Out of scope (Phase 1)
 
-### Evaluation
+- Memory logging or episodic memory
+- Vector DB / semantic search
+- FastAPI backend or Streamlit UI
+- Evaluation harness
+- Efficient VLM research
 
-Measure:
-
-```text
-- stream read success rate
-- average VLM latency
-- number of frames sent per query
-- answer quality by manual inspection
-```
-
-At this phase, don’t overdo it. Just make it stable.
+`camera_test/live_vlm_qa.py` is the lightweight predecessor; `vlm_smoke` supersedes it for ongoing work.
 
 ---
 
-# Phase 2 — `memory_log`: store visual memory as JSONL
+# Phase 2 — `memory_log`: question-driven visual memory
 
-Goal: create long-term memory records, but without vector DB yet.
+**Status: implemented**
 
-Do **not** add ChromaDB immediately. First make the memory format good.
+Goal: persist visual memories as JSONL when you ask questions about the live view.
 
-### Features
-
-Every N seconds, save:
+### What it does
 
 ```text
-- timestamp
-- image path
-- VLM scene summary
-- detected objects
-- location metadata placeholder
-- privacy risk
-- whether to store the memory
+frame stream → background frame buffer
+user asks question
+  → VLM answers your question (recent frames)
+  → append memory to outputs/memories.jsonl (query, answer, frames, location)
 ```
 
-Example record:
+**Important:** memories are written **only when you ask a question**. There is no timer-based logging. Each question uses **one VLM call** — no second structured-analysis pass.
+
+### Memory record (current format)
 
 ```json
 {
-  "memory_id": "2026-06-04T23-12-30.123",
-  "timestamp": "2026-06-04T23:12:30.123+09:00",
-  "image_path": "outputs/frames/2026-06-04T23-12-30.jpg",
-  "summary": "A desk with a laptop, cable, and GoPro accessories.",
-  "objects": ["desk", "laptop", "cable", "camera"],
-  "scene_type": "indoor_workspace",
+  "memory_id": "2026-06-06T16-57-09.525",
+  "timestamp": "2026-06-06T16:57:09.525+09:00",
+  "user_question": "What do you think about his facial expression? how does it change?",
+  "model_answer": "He starts with an exaggerated open-mouth expression...",
+  "frame_paths": [
+    "outputs/frames/2026-06-06T16-57-09.525_f01.jpg",
+    "outputs/frames/2026-06-06T16-57-09.525_f02.jpg"
+  ],
+  "frame_timestamps": [
+    "2026-06-06T16:57:00.434+09:00",
+    "2026-06-06T16:57:01.634+09:00"
+  ],
   "location": {
-    "lat": null,
-    "lon": null,
-    "source": "not_available"
+    "label": "phone location (Yoyogi, Shibuya, Tokyo, Japan)",
+    "lat": 35.68499131058371,
+    "lon": 139.6963945929086,
+    "source": "phone_gps",
+    "full_address": "代々木二丁目, 代々木, 渋谷区, 東京都, 151-0053, 日本",
+    "city": "渋谷区",
+    "prefecture": "東京都",
+    "postal_code": "151-0053",
+    "country": "日本",
+    "geocode_provider": "nominatim",
+    "geocoded_at": "2026-06-06T18:48:08.342+09:00"
   },
-  "should_store": true,
-  "memory_reason": "Contains meaningful workspace context.",
-  "privacy_risk": "low"
+  "camera_source": "phone-webrtc"
 }
 ```
 
-### Folder
+When `NUM_FRAMES_PER_QUERY=1`, a single `{memory_id}.jpg` is saved. With N > 1, frames are `{memory_id}_f01.jpg`, `_f02.jpg`, etc.
+
+**Legacy records:** older JSONL lines may still contain `summary`, `objects`, `scene_type`, `privacy_risk` from an earlier two-call format. The current writer stores `model_answer` and `frame_paths` instead.
+
+### Location metadata (built in)
+
+Video streams do not carry GPS. Location is resolved without a VLM call:
+
+| Source | How |
+| ------ | --- |
+| Tapo (`tapo-rtsp`, `tapo-webrtc`) | `TAPO_LOCATION_LABEL` and optional lat/lon in config |
+| Phone (`phone-webrtc`) | HTTPS GPS sidecar (`phone_location.html` + `LOCATION_SERVER_*`), else `PHONE_LOCATION_*` fallback |
+| Webcam / video | Global `LOCATION_*` env vars |
+
+Optional reverse geocoding (Nominatim + SQLite cache) fills `full_address`, `city`, `prefecture`, etc. at write time. See [memory_log/README.md](memory_log/README.md).
+
+### Folder layout
 
 ```text
 memory_log/
 ├── README.md
+├── pyproject.toml
+├── .env.example
 ├── src/
 │   ├── main.py
 │   ├── memory_writer.py
 │   ├── schema.py
 │   ├── vlm_client.py
-│   └── frame_source.py
+│   ├── frame_source.py
+│   ├── location.py
+│   ├── location_server.py
+│   ├── geocode_client.py
+│   └── geocode_cache.py
 └── outputs/
     ├── frames/
-    └── memories.jsonl
-```
-
-### Important design decision
-
-Use structured VLM output.
-
-Prompt the VLM to return JSON:
-
-```text
-Analyze this frame and return JSON:
-{
-  "summary": "...",
-  "scene_type": "...",
-  "objects": ["..."],
-  "people_count": 0,
-  "text_visible": ["..."],
-  "should_store": true,
-  "memory_reason": "...",
-  "privacy_risk": "low|medium|high"
-}
+    ├── memories.jsonl
+    └── geocode_cache.sqlite
 ```
 
 ### Success criteria
-
-After running for 2 minutes, you should have:
-
-```text
-- saved frame images
-- memories.jsonl
-- valid JSON records
-- no crash when stream temporarily fails
-```
-
-This phase is boring but extremely important. If your memory records are trash, retrieval will also be trash.
-
----
-
-# Phase 3 — `memory_search`: keyword/time-based memory QA
-
-Goal: answer past-memory questions **without vector DB** first.
-
-Example questions:
-
-```text
-What did I see recently?
-What was on my desk 5 minutes ago?
-Did I see a laptop today?
-Show me memories involving a person.
-```
-
-### Features
-
-Implement simple retrieval over `memories.jsonl`:
-
-```text
-- filter by time range
-- filter by object
-- filter by scene type
-- search summary text
-```
-
-No embeddings yet.
-
-### Why this comes before ChromaDB
-
-Because many memory questions are not semantic search problems. They are often:
-
-```text
-time filter + metadata filter + maybe semantic search
-```
-
-For example:
-
-```text
-Where was I yesterday afternoon?
-```
-
-This is mostly timestamp + location, not vector similarity.
-
-### Success criteria
-
-You can ask:
-
-```text
-What did I see in the last 10 minutes?
-```
-
-and it returns relevant memory records with timestamps and summaries.
-
----
-
-# Phase 4 — `vector_memory`: add ChromaDB / embedding retrieval
-
-Goal: support semantic memory questions.
-
-Now add vector DB.
-
-### Features
-
-For each memory record, embed:
-
-```text
-summary
-objects
-scene_type
-visible text
-location description if available
-```
-
-Store in ChromaDB with metadata:
-
-```text
-memory_id
-timestamp
-image_path
-scene_type
-objects
-privacy_risk
-lat/lon if available
-```
-
-### Example questions
-
-```text
-When did I see something like a restaurant?
-Did I pass by any signs?
-Where did I see a red object?
-What did I see near the station?
-```
-
-### Retrieval pipeline
-
-Use hybrid retrieval:
-
-```text
-1. Parse user question
-2. Extract filters:
-   - time range
-   - location
-   - objects
-   - scene type
-3. Retrieve candidate memories
-4. Rerank / select top K
-5. Send selected memory summaries + maybe images to VLM/LLM
-6. Answer with timestamps and evidence
-```
-
-### Success criteria
-
-For a memory question, the system returns:
-
-```text
-- answer
-- relevant memory timestamps
-- optionally image paths as evidence
-```
-
-Do not just return a vague answer. Always ground it in memory records.
-
----
-
-# Phase 5 — `location_memory`: add location metadata
-
-Goal: support questions like:
-
-```text
-Where was I yesterday afternoon?
-What did I see near this location?
-What did I see around Shibuya?
-```
-
-For now, fake it or manually inject it. Don’t block on smartphone GPS integration.
-
-### Step 5A: manual location
-
-Add CLI flag:
 
 ```bash
-uv run python -m src.main --location-label "home desk"
+cd memory_log
+uv run python -m src.main
 ```
 
-Store:
-
-```json
-{
-  "location": {
-    "label": "home desk",
-    "lat": null,
-    "lon": null
-  }
-}
-```
-
-### Step 5B: phone/server location later
-
-Eventually:
+After asking a few questions:
 
 ```text
-phone GPS → backend API → memory record
+- saved frame images under outputs/frames/
+- valid JSONL lines in outputs/memories.jsonl
+- location populated per source (config, phone_gps, or geocoded)
+- no crash when stream temporarily fails (reconnect handled by capture/)
 ```
 
-But for the prototype, manual label is enough.
-
-### Success criteria
-
-The system can answer:
-
-```text
-What did I see at home desk today?
-```
-
-or:
-
-```text
-What locations did I visit during this recording?
-```
-
----
-
-# Phase 6 — `backend_api`: make it a real service
-
-Goal: move from script to backend system.
-
-Use FastAPI.
-
-### Endpoints
-
-```text
-POST /ask_live
-- asks about current/recent frames
-
-POST /ask_memory
-- asks about stored memories
-
-POST /ingest_frame
-- optional future endpoint for phone/wearable frame upload
-
-GET /memories
-- inspect memory records
-
-GET /health
-- health check
-```
-
-Architecture:
-
-```text
-RTMP capture worker
-        ↓
-shared frame buffer
-        ↓
-FastAPI server
-        ↓
-VLM client + memory retriever
-```
-
-### Success criteria
-
-You can run:
+Inspect:
 
 ```bash
-uv run uvicorn src.app:app --reload
+tail -n 1 outputs/memories.jsonl | jq .
 ```
 
-Then call:
+### Relation to Phase 1
 
-```bash
-curl -X POST http://localhost:8000/ask_live \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What do you see right now?"}'
-```
-
-This is where the project starts looking like an actual system instead of a script.
+`vlm_smoke` is interactive QA only. `memory_log` adds persistent JSONL memories **when you ask**, using the same threaded capture model and VLM providers.
 
 ---
 
-# Phase 7 — `ui_demo`: simple user-facing prototype
+# Future work (planned)
 
-Goal: make a demo people can understand in 30 seconds.
+**Not implemented.** Detailed design for the database and query workflow will be added in a follow-up update.
 
-Use Streamlit first. Don’t waste time on a fancy React frontend yet.
+### 1. Passive observation memory
 
-### UI
+Continuous video stream → low-cost periodic scene records stored in a database. Background ingestion without requiring the user to ask a question each time. Design details (sampling rate, schema, storage) TBD.
 
-Add:
+### 2. Promoted event memory
+
+Detect and log important moments with retained video frames when events are promoted above passive observation noise. Bridges raw stream data and user-meaningful episodic memory. Design details TBD.
+
+### 3. Daily summary
+
+Compress passive observations and promoted events into abstract summaries for long-horizon recall. Information compression layer for querying weeks or months of visual history without scanning every frame record.
+
+### 4. Long-term memory query
+
+Predefined workflow for early attempts:
 
 ```text
-- live camera preview
-- text box for live questions
-- text box for memory questions
-- recent memory timeline
-- selected memory images
-- latency display
+user question
+  → context retriever (select relevant observations, events, summaries)
+  → answer generator (grounded response with timestamps and evidence)
 ```
 
-### Success criteria
+Focus on a fixed retrieval + generation pipeline before open-ended agent behavior.
 
-A teammate can use it without reading your code.
+### 5. Later
 
-This matters for internship evaluation because demos are judged emotionally too. A working UI makes the project feel real.
+After core memory layers exist:
+
+- **Evaluation suite** — latency, retrieval quality, answer correctness, hallucination rate
+- **Service separation** — API workers, ingestion workers, query service
+- **UI** — demo-facing interface for live and memory questions
 
 ---
 
-# Phase 8 — `eval_harness`: evaluate latency, retrieval, and answer quality
-
-Goal: turn your prototype into something measurable.
-
-### Evaluation dimensions
-
-For live QA:
+## Recommended order (current)
 
 ```text
-- end-to-end latency
-- VLM inference latency
-- frame capture latency
-- answer correctness
-- failure rate
+0. camera_test     — validate streams
+1. vlm_smoke       — live visual QA
+2. memory_log      — question-driven JSONL memories
+3. (TBD)           — passive observation → promoted events → daily summaries
+4. (TBD)           — long-term memory query (retriever + answerer)
+5. (TBD)           — eval, services, UI
 ```
-
-For memory QA:
-
-```text
-- retrieval recall@k
-- answer correctness
-- timestamp accuracy
-- location accuracy
-- hallucination rate
-```
-
-For efficiency:
-
-```text
-- number of frames sent per query
-- image resolution
-- number of visual tokens
-- cost per query
-- latency per query
-```
-
-### Dataset
-
-Record short controlled videos:
-
-```text
-video_001: desk scene
-video_002: walking outside
-video_003: convenience store shelf
-video_004: train station sign
-video_005: object placed then removed
-```
-
-Create questions:
-
-```json
-{
-  "question": "Did I see a red notebook?",
-  "answer": "Yes",
-  "evidence_time": "00:01:23",
-  "type": "object_memory"
-}
-```
-
-### Success criteria
-
-You can report:
-
-```text
-Current baseline:
-- live QA latency: 3.2 sec average
-- memory retrieval recall@5: 0.78
-- answer accuracy: 0.72
-- average frames sent per query: 4
-```
-
-This becomes presentation material.
-
----
-
-# Phase 9 — `efficient_vlm`: research/optimization layer
-
-Only after the system works, start research-style experiments.
-
-Possible directions:
-
-## Direction A: adaptive frame selection
-
-Instead of sending every sampled frame to VLM, choose frames based on:
-
-```text
-- scene change
-- object novelty
-- embedding distance
-- motion intensity
-- user query relevance
-```
-
-Baseline:
-
-```text
-send latest 4 frames
-```
-
-Improved:
-
-```text
-send top-k informative frames
-```
-
-Evaluate:
-
-```text
-accuracy vs latency vs cost
-```
-
-## Direction B: visual memory compression
-
-Store different memory levels:
-
-```text
-Level 0: raw image
-Level 1: thumbnail
-Level 2: VLM summary
-Level 3: structured metadata
-Level 4: embedding only
-```
-
-Question: when do you need the raw image again?
-
-This is directly relevant to:
-
-```text
-long-term visual memory + efficient inference
-```
-
-## Direction C: query-aware memory retrieval
-
-For user question:
-
-```text
-Where did I see a red sign?
-```
-
-Retrieve by:
-
-```text
-semantic text embedding + object metadata + color metadata + location/time filter
-```
-
-Compare against naive vector search.
-
-## Direction D: adaptive VLM routing
-
-Use cheaper models for easy frames and stronger models for hard frames:
-
-```text
-small VLM → confidence low → large VLM
-```
-
-This is practical and research-ish.
-
----
-
-# Recommended order
-
-I’d do this exact order:
-
-```text
-0. Current working RTMP + VLM QA
-1. vlm_smoke
-2. memory_log
-3. memory_search
-4. vector_memory
-5. backend_api
-6. ui_demo
-7. eval_harness
-8. efficient_vlm experiments
-9. smartphone/wearable integration
-```
-
-Notice I put **smartphone integration late**. That is intentional. It can eat tons of time and not teach much if the core memory system is weak.
-
----
-
-# What you should build next
-
-Your next feature should be:
-
-```text
-Automatic memory logging every 2–5 seconds
-```
-
-Not ChromaDB yet. Not vLLM yet. Not WebRTC yet.
-
-Implement this:
-
-```text
-RTMP stream
-→ sample frame every 3 sec
-→ ask VLM for structured JSON summary
-→ save image
-→ append memory record to memories.jsonl
-```
-
-Once you have 50–100 memory records, then add search.
-
-The first real milestone is:
-
-```text
-“I walked around / moved the camera for 5 minutes, and now I can ask what I saw earlier.”
-```
-
-That directly matches the project overview and is demo-worthy.
