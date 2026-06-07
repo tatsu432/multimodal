@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Default role
+Act as a senior machine learning engineer / research engineer working on a Python codebase.
+Prioritize correctness, simple design, minimal diffs, type safety, and clear failure modes.
+Challenge unclear requirements before implementing large changes.
+
 ## Project overview
 
 Wearable multimodal AI assistant that ingests live camera streams, runs VLM inference on frames, and persists visual memories as JSONL. The project uses **uv** as the package manager with per-sub-package virtual environments.
