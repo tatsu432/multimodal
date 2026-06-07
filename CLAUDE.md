@@ -7,6 +7,7 @@ Act as a senior machine learning engineer / research engineer working on a Pytho
 Prioritize correctness, simple design, minimal diffs, type safety, and clear failure modes.
 Challenge unclear requirements before implementing large changes.
 If you generate a plan then you should write the plan into a new markdown file inside .claude/tasks folder for the corresponding task such as `task-name-plan.md` for `task-name-spec.md`.
+If you implement a new feature, you should update the corresponding part in README.md.
 
 ## Bash command style
 - Avoid multiline quoted shell commands when possible.
@@ -103,3 +104,9 @@ tail -n 1 memory_log/outputs/memories.jsonl | jq .
 ```
 
 Legacy records may contain `summary`/`objects`/`privacy_risk` (old two-call format). Current format uses `model_answer` and `frame_paths`.
+
+LTM queries are logged to a **separate** `outputs/long_term_query_logs.sqlite` (one row per query with plan, retrieved counts, answer, per-stage latency). This DB is **excluded from memory retrieval** — it is observability/eval telemetry only.
+
+```bash
+sqlite3 memory_log/outputs/long_term_query_logs.sqlite "SELECT user_query, intent, latency_total_ms FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 5;"
+```

@@ -80,6 +80,9 @@ class Config:
     ltm_active_query_top_k: int
     ltm_final_event_k: int
     ltm_use_visual_grounding: bool
+    # Long-term query logging (separate DB; excluded from retrieval)
+    query_log_enabled: bool
+    query_log_db_path: Path
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -108,6 +111,12 @@ class Config:
         )
         if not memory_db_path.is_absolute():
             memory_db_path = PROJECT_ROOT / memory_db_path
+
+        query_log_db_path = Path(
+            os.getenv("QUERY_LOG_DB_PATH", "outputs/long_term_query_logs.sqlite")
+        )
+        if not query_log_db_path.is_absolute():
+            query_log_db_path = PROJECT_ROOT / query_log_db_path
 
         passive_frame_dir = Path(
             os.getenv("PASSIVE_FRAME_DIR", "outputs/passive_frames")
@@ -212,6 +221,10 @@ class Config:
             ltm_use_visual_grounding=parse_bool_env(
                 os.getenv("LTM_USE_VISUAL_GROUNDING", "true")
             ),
+            query_log_enabled=parse_bool_env(
+                os.getenv("LTM_QUERY_LOG_ENABLED", "true")
+            ),
+            query_log_db_path=query_log_db_path,
         )
 
     def validate(self) -> None:

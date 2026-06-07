@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime
 
 from src.config import Config, PROJECT_ROOT
@@ -13,6 +14,7 @@ from src.ltm_query.evidence import VisualGroundingResult, build_evidence_pack
 from src.ltm_query.query_planner import QueryPlanner, RetrievalPlan
 from src.ltm_query.retrieval import MemoryRetriever
 from src.memory_db import open_db
+from src.query_log import QueryLogWriter, build_query_log_record
 
 logger = logging.getLogger("memory_log.ltm_query.cli")
 
@@ -67,82 +69,132 @@ def run_query(
     frame_source=None,
     current_location=None,
     no_grounding: bool = False,
+    log_writer: QueryLogWriter | None = None,
 ) -> None:
-    print("\nPlanning...")
-    plan = planner.plan(query)
-    _print_plan(plan)
-
+    t_start = time.perf_counter()
+    timings: dict[str, float | None] = {
+        "plan_ms": None,
+        "grounding_ms": None,
+        "retrieval_ms": None,
+        "answer_ms": None,
+    }
+    plan: RetrievalPlan | None = None
     visual_grounding: VisualGroundingResult | None = None
-    if (
-        not no_grounding
-        and config.ltm_use_visual_grounding
-        and plan.needs_current_visual_grounding
-        and grounder is not None
-        and frame_source is not None
-    ):
-        print("\nRunning visual grounding on current scene...")
-        frames = frame_source.get_recent(4) if hasattr(frame_source, "get_recent") else []
-        frame_items = frame_source.get_recent_items(4) if hasattr(frame_source, "get_recent_items") else None
-        if frames:
-            visual_grounding = grounder.ground(query, frames, frame_items, current_location)
-            if visual_grounding:
-                print(f"  scene: {visual_grounding.current_scene_summary}")
-                if visual_grounding.semantic_retrieval_query:
-                    if plan.semantic_query:
-                        plan.semantic_query += " " + visual_grounding.semantic_retrieval_query
-                    else:
-                        plan.semantic_query = visual_grounding.semantic_retrieval_query
-                if visual_grounding.suggested_location_radius_m and current_location:
-                    from src.ltm_query.query_planner import LocationFilter
-                    if current_location.lat is not None and current_location.lon is not None:
-                        plan.location_filter = LocationFilter(
-                            lat=current_location.lat,
-                            lon=current_location.lon,
-                            radius_m=visual_grounding.suggested_location_radius_m,
-                        )
-        else:
-            print("  no frames available for grounding")
+    results = None
+    answer: str | None = None
+    error: str | None = None
+    expanded = False
 
-    print("\nRetrieving...")
-    results = retriever.retrieve(plan)
+    try:
+        print("\nPlanning...")
+        t0 = time.perf_counter()
+        plan = planner.plan(query)
+        timings["plan_ms"] = (time.perf_counter() - t0) * 1000
+        _print_plan(plan)
 
-    # Sufficiency check: visual_recall with no events → try broader time range
-    if (
-        plan.intent == "visual_recall"
-        and not results.promoted_events
-        and not results.active_queries
-        and plan.time_range is not None
-    ):
-        print("  insufficient evidence — expanding time range...")
-        from src.ltm_query.query_planner import TimeRange
-        from src.ltm_query.retrieval import RetrievalResults
-        expanded_plan = RetrievalPlan(
-            intent=plan.intent,
-            time_range=None,
-            location_filter=plan.location_filter,
-            semantic_query=plan.semantic_query,
-            needs_current_visual_grounding=False,
-            needs_retrieved_frames=plan.needs_retrieved_frames,
-            stores_to_query=[
-                s for s in plan.stores_to_query
-                if s.store in ("promoted_events", "active_query_memories")
-            ],
-        )
-        expanded_results = retriever.retrieve(expanded_plan)
-        results.promoted_events = expanded_results.promoted_events
-        results.active_queries = expanded_results.active_queries
-        if results.promoted_events or results.active_queries:
-            print(f"  found {len(results.promoted_events)} events after expansion")
+        if (
+            not no_grounding
+            and config.ltm_use_visual_grounding
+            and plan.needs_current_visual_grounding
+            and grounder is not None
+            and frame_source is not None
+        ):
+            print("\nRunning visual grounding on current scene...")
+            t0 = time.perf_counter()
+            frames = frame_source.get_recent(4) if hasattr(frame_source, "get_recent") else []
+            frame_items = frame_source.get_recent_items(4) if hasattr(frame_source, "get_recent_items") else None
+            if frames:
+                visual_grounding = grounder.ground(query, frames, frame_items, current_location)
+                if visual_grounding:
+                    print(f"  scene: {visual_grounding.current_scene_summary}")
+                    if visual_grounding.semantic_retrieval_query:
+                        if plan.semantic_query:
+                            plan.semantic_query += " " + visual_grounding.semantic_retrieval_query
+                        else:
+                            plan.semantic_query = visual_grounding.semantic_retrieval_query
+                    if visual_grounding.suggested_location_radius_m and current_location:
+                        from src.ltm_query.query_planner import LocationFilter
+                        if current_location.lat is not None and current_location.lon is not None:
+                            plan.location_filter = LocationFilter(
+                                lat=current_location.lat,
+                                lon=current_location.lon,
+                                radius_m=visual_grounding.suggested_location_radius_m,
+                            )
+            else:
+                print("  no frames available for grounding")
+            timings["grounding_ms"] = (time.perf_counter() - t0) * 1000
 
-    if plan.needs_retrieved_frames and not results.frame_paths and results.promoted_events:
-        results.frame_paths = retriever._query_frames(results.promoted_events)
+        print("\nRetrieving...")
+        t0 = time.perf_counter()
+        results = retriever.retrieve(plan)
 
-    evidence = build_evidence_pack(query, plan, results, visual_grounding)
-    _print_evidence_summary(evidence)
+        # Sufficiency check: visual_recall with no events → try broader time range
+        if (
+            plan.intent == "visual_recall"
+            and not results.promoted_events
+            and not results.active_queries
+            and plan.time_range is not None
+        ):
+            print("  insufficient evidence — expanding time range...")
+            from src.ltm_query.query_planner import TimeRange
+            from src.ltm_query.retrieval import RetrievalResults
+            expanded_plan = RetrievalPlan(
+                intent=plan.intent,
+                time_range=None,
+                location_filter=plan.location_filter,
+                semantic_query=plan.semantic_query,
+                needs_current_visual_grounding=False,
+                needs_retrieved_frames=plan.needs_retrieved_frames,
+                stores_to_query=[
+                    s for s in plan.stores_to_query
+                    if s.store in ("promoted_events", "active_query_memories")
+                ],
+            )
+            expanded_results = retriever.retrieve(expanded_plan)
+            results.promoted_events = expanded_results.promoted_events
+            results.active_queries = expanded_results.active_queries
+            if results.promoted_events or results.active_queries:
+                print(f"  found {len(results.promoted_events)} events after expansion")
+            expanded = True
+        timings["retrieval_ms"] = (time.perf_counter() - t0) * 1000
 
-    print("\nGenerating answer...")
-    answer = answer_gen.generate(evidence)
-    print(f"\nAnswer: {answer}\n")
+        if plan.needs_retrieved_frames and not results.frame_paths and results.promoted_events:
+            results.frame_paths = retriever._query_frames(results.promoted_events)
+
+        evidence = build_evidence_pack(query, plan, results, visual_grounding)
+        _print_evidence_summary(evidence)
+
+        print("\nGenerating answer...")
+        t0 = time.perf_counter()
+        answer = answer_gen.generate(evidence)
+        timings["answer_ms"] = (time.perf_counter() - t0) * 1000
+        print(f"\nAnswer: {answer}\n")
+
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        raise
+
+    finally:
+        if log_writer is not None:
+            total_ms = (time.perf_counter() - t_start) * 1000
+            try:
+                record = build_query_log_record(
+                    query=query,
+                    plan=plan,
+                    visual_grounding=visual_grounding,
+                    results=results,
+                    answer=answer,
+                    error=error,
+                    timings=timings,
+                    total_ms=total_ms,
+                    expanded=expanded,
+                    no_grounding=no_grounding,
+                    vlm_provider=config.vlm_provider,
+                    vlm_model=config.vlm_model,
+                )
+                log_writer.log(record)
+            except Exception as log_exc:
+                logger.warning("Failed to write query log: %s", log_exc)
 
 
 def main() -> None:
@@ -182,6 +234,14 @@ def main() -> None:
     except Exception as exc:
         logger.error("Could not open memory DB at %s: %s", config.memory_db_path, exc)
         sys.exit(1)
+
+    query_log_writer: QueryLogWriter | None = None
+    if config.query_log_enabled:
+        try:
+            query_log_writer = QueryLogWriter(config.query_log_db_path)
+            logger.info("Query log DB opened: %s", config.query_log_db_path)
+        except Exception as exc:
+            logger.warning("Could not open query log DB (logging disabled): %s", exc)
 
     planner = QueryPlanner(config)
     retriever = MemoryRetriever(conn, config)
@@ -249,6 +309,7 @@ def main() -> None:
                     frame_source=frame_source,
                     current_location=current_location,
                     no_grounding=args.no_grounding,
+                    log_writer=query_log_writer,
                 )
             except Exception as exc:
                 logger.exception("Query error: %s", exc)
@@ -260,6 +321,11 @@ def main() -> None:
         if frame_source is not None:
             frame_source.stop()
             frame_source.release()
+        if query_log_writer is not None:
+            try:
+                query_log_writer.close()
+            except Exception:
+                pass
         print("Done.")
 
 

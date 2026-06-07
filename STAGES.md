@@ -357,6 +357,10 @@ cd memory_log && uv run python -m src.ltm_query
 cd memory_log && uv run python -m src.ltm_query --no-grounding
 ```
 
+Each query is logged to `outputs/long_term_query_logs.sqlite` (a **separate** file, never
+touched by retrieval): plan JSON, retrieved counts + row IDs, answer, per-stage latency,
+error field. Disable with `LTM_QUERY_LOG_ENABLED=false` in `.env`.
+
 Example queries:
 - "Where was I yesterday?"
 - "What did I ask about the camera?"
