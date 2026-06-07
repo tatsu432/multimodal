@@ -17,6 +17,8 @@ from src.location import (
     resolve_location,
 )
 from src.location_server import LocationServer
+from src.db_writer import SQLiteWriter
+from src.memory_db import open_db
 from src.memory_writer import MemoryWriter
 from src.vlm_client import VLMClient, create_vlm_client
 
@@ -75,6 +77,7 @@ def _handle_question(
     geocode_client: GeocodeClient | None,
     question: str,
     stats: RunStats,
+    db_writer: SQLiteWriter | None = None,
 ) -> None:
     num_frames = min(config.num_frames_per_query, config.frame_buffer_size)
     frames = source.get_recent(num_frames)
@@ -139,6 +142,18 @@ def _handle_question(
     stats.memories_written += 1
     _log_memory_line(record, latency_sec)
 
+    if db_writer is not None:
+        try:
+            db_writer.write_active_query_with_event(
+                record,
+                location,
+                frames,
+                frame_items,
+                event_frame_dir=config.promoted_event_frame_dir,
+            )
+        except Exception as exc:
+            logger.error("SQLite write failed (JSONL still saved): %s", exc)
+
 
 def run_repl(
     config: Config,
@@ -147,6 +162,7 @@ def run_repl(
     writer: MemoryWriter,
     sidecar: LocationSidecarStore | None,
     geocode_client: GeocodeClient | None,
+    db_writer: SQLiteWriter | None = None,
 ) -> RunStats:
     stats = RunStats()
     start_time = time.monotonic()
@@ -190,6 +206,7 @@ def run_repl(
                 geocode_client,
                 question,
                 stats,
+                db_writer=db_writer,
             )
         except Exception as exc:
             logger.exception("Error handling question: %s", exc)
@@ -261,10 +278,19 @@ def main() -> None:
     vlm = create_vlm_client(config)
     writer = MemoryWriter(config)
 
+    db_writer: SQLiteWriter | None = None
+    try:
+        conn = open_db(config.memory_db_path)
+        from src.config import PROJECT_ROOT
+        db_writer = SQLiteWriter(conn, PROJECT_ROOT)
+        logger.info("SQLite memory DB opened: %s", config.memory_db_path)
+    except Exception as exc:
+        logger.warning("Could not open SQLite memory DB (JSONL-only mode): %s", exc)
+
     stats = RunStats()
     try:
         source.start()
-        stats = run_repl(config, source, vlm, writer, sidecar, geocode_client)
+        stats = run_repl(config, source, vlm, writer, sidecar, geocode_client, db_writer=db_writer)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         logger.info("Keyboard interrupt received")

@@ -8,6 +8,16 @@
 *.jpg
 sampled_frames/
 
+# SQLite/cache databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite-trace
+*.sqlite-trace-journal
+*.sqlite-trace-wal
+*.sqlite-trace-journal
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

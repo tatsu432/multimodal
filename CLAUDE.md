@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Act as a senior machine learning engineer / research engineer working on a Python codebase.
 Prioritize correctness, simple design, minimal diffs, type safety, and clear failure modes.
 Challenge unclear requirements before implementing large changes.
+If you generate a plan then you should write the plan into a new markdown file inside .claude/tasks folder for the corresponding task such as `task-name-plan.md` for `task-name-spec.md`.
+
+## Bash command style
+- Avoid multiline quoted shell commands when possible.
+- Prefer temporary Python scripts or one-line commands.
+- Avoid newline + `#` inside quoted command arguments because Claude Code may trigger path-validation warnings.
 
 ## Project overview
 

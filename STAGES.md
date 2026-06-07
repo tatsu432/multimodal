@@ -33,10 +33,14 @@ capture/ (shared stream config + ring buffer)
         ↓
 VLM inference (OpenAI or Ollama)
         ↓
-[vlm_smoke] live Q&A only
-[memory_log] Q&A + JSONL memory records (+ location / geocode)
+[vlm_smoke]       live Q&A only
+[memory_log]      Q&A + JSONL + SQLite (active_query_memories + promoted_events + frames)
+[passive_observer] periodic background logging → passive_observations table
         ↓
-(future) passive observation → promoted events → daily summaries → LTM query
+[daily_summary]   LLM-compressed daily records → daily_summaries table
+        ↓
+[ltm_query]       query planner → retrieval → evidence pack → grounded answer
+                  optional visual grounding for "this/here/current scene" queries
 ```
 
 ---
@@ -49,8 +53,12 @@ VLM inference (OpenAI or Ollama)
 | `capture/` | **Done** — shared camera ingestion | (root package, see below) |
 | `providers/` | **Done** — shared Ollama client | (root package, see below) |
 | `vlm_smoke/` | **Done** — live visual QA | [vlm_smoke/README.md](vlm_smoke/README.md) |
-| `memory_log/` | **Done** — question-driven JSONL memories | [memory_log/README.md](memory_log/README.md) |
-| Memory layers + LTM query | **Planned** — details TBD | (this file, Future work) |
+| `memory_log/` | **Done** — question-driven JSONL memories + SQLite memory DB | [memory_log/README.md](memory_log/README.md) |
+| Passive observation | **Done** — `src/passive_observer.py` periodic background logging | [memory_log/README.md](memory_log/README.md) |
+| Promoted events | **Done** — auto-created on active query; SQLite `promoted_events` table | [memory_log/README.md](memory_log/README.md) |
+| Active query memories | **Done** — SQLite `active_query_memories` table, linked to events | [memory_log/README.md](memory_log/README.md) |
+| Daily summaries | **Done** — `src/daily_summary.py` LLM-compressed daily records | [memory_log/README.md](memory_log/README.md) |
+| Long-term memory query | **Done** — `src/ltm_query/` deterministic retrieval + grounded answering | [memory_log/README.md](memory_log/README.md) |
 | Eval / API / UI | **Planned** — after core memory | (this file, Future work) |
 
 ---
@@ -303,39 +311,68 @@ tail -n 1 outputs/memories.jsonl | jq .
 
 ---
 
-# Future work (planned)
+# Memory layers + LTM query (implemented)
 
-**Not implemented.** Detailed design for the database and query workflow will be added in a follow-up update.
+All four memory layers and the long-term query system are now implemented inside `memory_log/`.
 
-### 1. Passive observation memory
+### 1. Passive observation memory — `src/passive_observer.py`
 
-Continuous video stream → low-cost periodic scene records stored in a database. Background ingestion without requiring the user to ask a question each time. Design details (sampling rate, schema, storage) TBD.
+Background logging every `PASSIVE_OBSERVATION_INTERVAL_SEC` (default 30s). No VLM. Writes to `passive_observations` SQLite table: timestamp, location, optional frame path + thumbnail, optional pHash.
 
-### 2. Promoted event memory
-
-Detect and log important moments with retained video frames when events are promoted above passive observation noise. Bridges raw stream data and user-meaningful episodic memory. Design details TBD.
-
-### 3. Daily summary
-
-Compress passive observations and promoted events into abstract summaries for long-horizon recall. Information compression layer for querying weeks or months of visual history without scanning every frame record.
-
-### 4. Long-term memory query
-
-Predefined workflow for early attempts:
-
-```text
-user question
-  → context retriever (select relevant observations, events, summaries)
-  → answer generator (grounded response with timestamps and evidence)
+```bash
+cd memory_log && uv run python -m src.passive_observer
 ```
 
-Focus on a fixed retrieval + generation pipeline before open-ended agent behavior.
+### 2. Promoted event memory — `src/db_writer.py`
+
+Auto-created whenever the user asks a question (active query path). `source_type='active_query'`, `promotion_reason='user_asked_question'`. The `scene_summary` and `semantic_search_text` are derived from `model_answer` (one-call constraint preserved; marked with `extra_json={"summary_from":"model_answer_fallback"}`).
+
+### 3. Daily summary — `src/daily_summary.py`
+
+LLM-compressed daily records. Input: passive observation timeline + promoted events + active queries for the day. Output: one `daily_summaries` row with structured JSON.
+
+```bash
+cd memory_log && uv run python -m src.daily_summary --date 2026-06-06
+```
+
+### 4. Long-term memory query — `src/ltm_query/`
+
+Deterministic pipeline:
+
+```text
+user query
+  → QueryPlanner (LLM → structured RetrievalPlan JSON)
+  → optional VisualGrounder (VLM on current frames if "this/here" detected)
+  → MemoryRetriever (SQL queries on SQLite: time/location + LIKE keyword search)
+  → build_evidence_pack (aggregates passive timeline, events, Q&A, frames)
+  → one expansion step if visual_recall intent has no events
+  → AnswerGenerator (text-only LLM with evidence context)
+```
+
+```bash
+cd memory_log && uv run python -m src.ltm_query
+cd memory_log && uv run python -m src.ltm_query --no-grounding
+```
+
+Example queries:
+- "Where was I yesterday?"
+- "What did I ask about the camera?"
+- "What did I see near this location?"
+- "What was here yesterday?" (requires visual grounding + live camera)
+
+### Current limitations
+
+- `scene_summary` for promoted events uses `model_answer` as a weak proxy (no dedicated VLM call).
+- Semantic retrieval uses SQLite `LIKE` keyword search — no vector embeddings yet. Code is structured for later ChromaDB plug-in.
+- Visual grounding requires a live camera connection for "this/here" queries.
+- Passive observation pHash requires `imagehash` (already in dependencies).
 
 ### 5. Later
 
 After core memory layers exist:
 
 - **Evaluation suite** — latency, retrieval quality, answer correctness, hallucination rate
+- **Vector retrieval** — plug in ChromaDB or SQLite VSS for `semantic_search_text` embeddings
 - **Service separation** — API workers, ingestion workers, query service
 - **UI** — demo-facing interface for live and memory questions
 
@@ -344,10 +381,10 @@ After core memory layers exist:
 ## Recommended order (current)
 
 ```text
-0. camera_test     — validate streams
-1. vlm_smoke       — live visual QA
-2. memory_log      — question-driven JSONL memories
-3. (TBD)           — passive observation → promoted events → daily summaries
-4. (TBD)           — long-term memory query (retriever + answerer)
+0. camera_test      — validate streams
+1. vlm_smoke        — live visual QA
+2. memory_log       — question-driven JSONL + SQLite active query memories
+3. passive_observer — background location/frame logging
+4. ltm_query        — long-term memory query CLI
 5. (TBD)           — eval, services, UI
 ```

@@ -67,6 +67,19 @@ class Config:
     geocode_skip_if_label_set: bool
     save_frames: bool
     max_runtime_seconds: float | None
+    # SQLite memory database
+    memory_db_path: Path
+    # Passive observer
+    passive_observation_interval_sec: float
+    passive_save_frames: bool
+    passive_frame_dir: Path
+    promoted_event_frame_dir: Path
+    # LTM query retrieval budgets
+    ltm_max_passive_rows: int
+    ltm_promoted_event_top_k: int
+    ltm_active_query_top_k: int
+    ltm_final_event_k: int
+    ltm_use_visual_grounding: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -89,6 +102,24 @@ class Config:
         )
         if not geocode_cache_path.is_absolute():
             geocode_cache_path = PROJECT_ROOT / geocode_cache_path
+
+        memory_db_path = Path(
+            os.getenv("MEMORY_DB_PATH", "outputs/memory.sqlite")
+        )
+        if not memory_db_path.is_absolute():
+            memory_db_path = PROJECT_ROOT / memory_db_path
+
+        passive_frame_dir = Path(
+            os.getenv("PASSIVE_FRAME_DIR", "outputs/passive_frames")
+        )
+        if not passive_frame_dir.is_absolute():
+            passive_frame_dir = PROJECT_ROOT / passive_frame_dir
+
+        promoted_event_frame_dir = Path(
+            os.getenv("PROMOTED_EVENT_FRAME_DIR", "outputs/event_frames")
+        )
+        if not promoted_event_frame_dir.is_absolute():
+            promoted_event_frame_dir = PROJECT_ROOT / promoted_event_frame_dir
 
         return cls(
             frame_source_type=os.getenv("FRAME_SOURCE_TYPE", "camera")
@@ -160,6 +191,26 @@ class Config:
             save_frames=parse_bool_env(os.getenv("SAVE_FRAMES", "true")),
             max_runtime_seconds=parse_optional_float_env(
                 os.getenv("MAX_RUNTIME_SECONDS", "")
+            ),
+            memory_db_path=memory_db_path,
+            passive_observation_interval_sec=float(
+                os.getenv("PASSIVE_OBSERVATION_INTERVAL_SEC", "30")
+            ),
+            passive_save_frames=parse_bool_env(
+                os.getenv("PASSIVE_SAVE_FRAMES", "true")
+            ),
+            passive_frame_dir=passive_frame_dir,
+            promoted_event_frame_dir=promoted_event_frame_dir,
+            ltm_max_passive_rows=int(os.getenv("LTM_MAX_PASSIVE_ROWS", "1000")),
+            ltm_promoted_event_top_k=int(
+                os.getenv("LTM_PROMOTED_EVENT_TOP_K", "20")
+            ),
+            ltm_active_query_top_k=int(
+                os.getenv("LTM_ACTIVE_QUERY_TOP_K", "10")
+            ),
+            ltm_final_event_k=int(os.getenv("LTM_FINAL_EVENT_K", "5")),
+            ltm_use_visual_grounding=parse_bool_env(
+                os.getenv("LTM_USE_VISUAL_GROUNDING", "true")
             ),
         )
 

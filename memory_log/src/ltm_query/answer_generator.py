@@ -1,0 +1,120 @@
+"""Answer generator — synthesizes retrieved evidence into a grounded answer via text LLM."""
+
+from __future__ import annotations
+
+import logging
+
+from src.config import Config
+from src.ltm_query.evidence import EvidencePack
+
+logger = logging.getLogger("memory_log.ltm_query.answer_generator")
+
+_ANSWER_SYSTEM_PROMPT = """\
+You are answering a user's question about their past visual memories stored by a wearable AI assistant.
+
+Rules:
+1. Answer ONLY from the evidence provided. Do not invent details.
+2. Always mention timestamps and locations when they are relevant.
+3. Explicitly distinguish:
+   - "Based on saved memories, ..." — when you have clear evidence
+   - "I found evidence that ..." — when evidence is partial
+   - "I do not have enough memory to know ..." — when evidence is missing
+4. If observation coverage was incomplete (camera off, no data), say so.
+5. Be concise but specific. Prefer "around 渋谷区 at 15:30" over vague summaries.
+"""
+
+
+def _format_evidence(evidence: EvidencePack) -> str:
+    lines: list[str] = [f"User query: {evidence.user_query}"]
+
+    if evidence.time_range_description:
+        lines.append(f"Interpreted time range: {evidence.time_range_description}")
+    if evidence.location_context:
+        lines.append(f"Location context: {evidence.location_context}")
+
+    if evidence.visual_grounding:
+        vg = evidence.visual_grounding
+        lines.append("\n--- Current scene (visual grounding) ---")
+        lines.append(f"Scene: {vg.current_scene_summary}")
+        if vg.visible_objects:
+            lines.append(f"Visible objects: {', '.join(vg.visible_objects)}")
+        if vg.resolved_references:
+            for ref, desc in vg.resolved_references.items():
+                lines.append(f"Resolved '{ref}': {desc}")
+
+    if evidence.daily_summaries:
+        lines.append("\n--- Daily summaries ---")
+        for row in evidence.daily_summaries:
+            lines.append(f"[{row['date_local']}] {row['summary_text']}")
+
+    if evidence.passive_timeline:
+        lines.append("\n--- Location timeline (from passive observations) ---")
+        for seg in evidence.passive_timeline:
+            lines.append(
+                f"- {seg.start_local} – {seg.end_local}: "
+                f"{seg.location_label} ({seg.observation_count} observations)"
+            )
+
+    if evidence.promoted_events:
+        lines.append("\n--- Promoted visual events ---")
+        for row in evidence.promoted_events:
+            ts = (row["timestamp_local"] or row["start_ts_utc"] or "")[:19]
+            loc = row["location_label"] or row["city"] or "unknown location"
+            summary = row["scene_summary"] or row["raw_vlm_output"] or ""
+            lines.append(f"[{ts}] {loc}: {summary[:300]}")
+
+    if evidence.active_queries:
+        lines.append("\n--- Past Q&A interactions ---")
+        for row in evidence.active_queries:
+            ts = (row["timestamp_local"] or row["timestamp_utc"] or "")[:19]
+            loc = row["location_label"] or row["city"] or ""
+            loc_str = f" ({loc})" if loc else ""
+            lines.append(f"[{ts}]{loc_str} Q: {row['user_question']}")
+            if row["model_answer"]:
+                lines.append(f"  A: {row['model_answer'][:200]}")
+
+    if evidence.uncertainty_notes:
+        lines.append("\n--- Retrieval notes ---")
+        for note in evidence.uncertainty_notes:
+            lines.append(f"- {note}")
+
+    return "\n".join(lines)
+
+
+class AnswerGenerator:
+    def __init__(self, config: Config) -> None:
+        self._config = config
+
+    def generate(self, evidence: EvidencePack) -> str:
+        evidence_text = _format_evidence(evidence)
+        try:
+            if self._config.vlm_provider == "openai":
+                return self._call_openai(evidence_text)
+            return self._call_ollama(evidence_text)
+        except Exception as exc:
+            logger.error("Answer generation failed: %s", exc)
+            return f"I encountered an error generating the answer: {exc}"
+
+    def _call_openai(self, evidence_text: str) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self._config.openai_api_key)
+        response = client.responses.create(
+            model=self._config.vlm_model,
+            instructions=_ANSWER_SYSTEM_PROMPT,
+            input=evidence_text,
+        )
+        return response.output_text.strip()
+
+    def _call_ollama(self, evidence_text: str) -> str:
+        from providers.ollama import chat as ollama_chat
+
+        messages = [
+            {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
+            {"role": "user", "content": evidence_text},
+        ]
+        return ollama_chat(
+            self._config.vlm_model,
+            messages,
+            base_url=self._config.ollama_base_url,
+        ).strip()
