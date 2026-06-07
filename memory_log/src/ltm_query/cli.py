@@ -12,7 +12,7 @@ from src.config import Config, PROJECT_ROOT
 from src.ltm_query.answer_generator import AnswerGenerator, format_evidence
 from src.ltm_query.evidence import VisualGroundingResult, build_evidence_pack
 from src.ltm_query.query_planner import QueryPlanner, RetrievalPlan
-from src.ltm_query.retrieval import MemoryRetriever
+from src.ltm_query.retrieval import MemoryRetriever, retrieve_with_expansion
 from src.memory_db import open_db
 from src.query_log import QueryLogWriter, build_query_log_record
 
@@ -127,40 +127,12 @@ def run_query(
 
         print("\nRetrieving...")
         t0 = time.perf_counter()
-        results = retriever.retrieve(plan)
-
-        # Sufficiency check: visual_recall with no events → try broader time range
-        if (
-            plan.intent == "visual_recall"
-            and not results.promoted_events
-            and not results.active_queries
-            and plan.time_range is not None
-        ):
-            print("  insufficient evidence — expanding time range...")
-            from src.ltm_query.query_planner import TimeRange
-            from src.ltm_query.retrieval import RetrievalResults
-            expanded_plan = RetrievalPlan(
-                intent=plan.intent,
-                time_range=None,
-                location_filter=plan.location_filter,
-                semantic_query=plan.semantic_query,
-                needs_current_visual_grounding=False,
-                needs_retrieved_frames=plan.needs_retrieved_frames,
-                stores_to_query=[
-                    s for s in plan.stores_to_query
-                    if s.store in ("promoted_events", "active_query_memories")
-                ],
-            )
-            expanded_results = retriever.retrieve(expanded_plan)
-            results.promoted_events = expanded_results.promoted_events
-            results.active_queries = expanded_results.active_queries
-            # Merge expansion trace so both attempts are visible in telemetry
-            for t in expanded_results.trace:
-                t.note = (t.note or "") + " [post-expansion]"
-            results.trace.extend(expanded_results.trace)
+        results, expanded = retrieve_with_expansion(plan, retriever)
+        if expanded:
             if results.promoted_events or results.active_queries:
-                print(f"  found {len(results.promoted_events)} events after expansion")
-            expanded = True
+                print(f"  insufficient evidence — expanded time range; found {len(results.promoted_events)} events")
+            else:
+                print("  insufficient evidence — expanded time range; still no events found")
         timings["retrieval_ms"] = (time.perf_counter() - t0) * 1000
 
         if plan.needs_retrieved_frames and not results.frame_paths and results.promoted_events:

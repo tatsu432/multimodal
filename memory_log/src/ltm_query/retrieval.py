@@ -400,3 +400,53 @@ class MemoryRetriever:
         paths = [row["frame_path"] for row in rows if row["frame_path"]]
         logger.debug("frames: %d paths from top %d events", len(paths), len(top_events))
         return paths
+
+
+def retrieve_with_expansion(
+    plan: RetrievalPlan,
+    retriever: MemoryRetriever,
+) -> tuple[RetrievalResults, bool]:
+    """Run retrieval and optionally expand time range for ``visual_recall`` queries.
+
+    When intent is ``visual_recall``, no events are found, and a ``time_range`` was
+    set, this re-runs retrieval without the time constraint over ``promoted_events``
+    and ``active_query_memories`` only.  The expansion trace entries are tagged with
+    ``[post-expansion]`` so telemetry can distinguish original vs. expanded results.
+
+    Returns ``(results, was_expanded)``.
+    """
+    results = retriever.retrieve(plan)
+    expanded = False
+
+    if (
+        plan.intent == "visual_recall"
+        and not results.promoted_events
+        and not results.active_queries
+        and plan.time_range is not None
+    ):
+        expanded_plan = RetrievalPlan(
+            intent=plan.intent,
+            time_range=None,
+            location_filter=plan.location_filter,
+            semantic_query=plan.semantic_query,
+            needs_current_visual_grounding=False,
+            needs_retrieved_frames=plan.needs_retrieved_frames,
+            stores_to_query=[
+                s for s in plan.stores_to_query
+                if s.store in ("promoted_events", "active_query_memories")
+            ],
+        )
+        expanded_results = retriever.retrieve(expanded_plan)
+        results.promoted_events = expanded_results.promoted_events
+        results.active_queries = expanded_results.active_queries
+        for t in expanded_results.trace:
+            t.note = (t.note or "") + " [post-expansion]"
+        results.trace.extend(expanded_results.trace)
+        expanded = True
+        logger.info(
+            "Time-range expansion: found %d events, %d queries",
+            len(results.promoted_events),
+            len(results.active_queries),
+        )
+
+    return results, expanded

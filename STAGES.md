@@ -62,7 +62,8 @@ VLM inference (OpenAI or Ollama)
 | Daily summaries | **Done** — `src/daily_summary.py` LLM-compressed daily records | [memory_log/README.md](memory_log/README.md) |
 | Long-term memory query | **Done** — `src/ltm_query/` deterministic retrieval + grounded answering | [memory_log/README.md](memory_log/README.md) |
 | Unified runner | **Done** — `src/run_all.py` wearable "on" switch (live QA + passive, shared resources) | [memory_log/README.md](memory_log/README.md) |
-| Eval / API / UI | **Planned** — after core memory | (this file, Future work) |
+| Dashboard UI | **Done** — `src/dashboard/` browser UI: live MJPEG frame + streaming Live-QA chat + LTM query panels | [memory_log/README.md](memory_log/README.md) |
+| Eval / API | **Planned** — after core memory | (this file, Future work) |
 
 ---
 

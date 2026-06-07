@@ -196,7 +196,31 @@ VLM_MODEL=llava
 OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-## Run
+## Dashboard UI (recommended)
+
+A browser-based dashboard with a live MJPEG camera frame, a streaming Live-QA chat
+panel, and a Long-term Memory search panel (planner → retrieval trace → streaming answer):
+
+```bash
+cd memory_log
+uv run python -m src.dashboard
+# → open http://127.0.0.1:8800/ in your browser
+```
+
+Options:
+```
+--host 0.0.0.0   expose on the LAN (default: 127.0.0.1)
+--port 9000      use a different port (default: 8800)
+--no-grounding   disable live visual grounding for LTM queries (no camera needed for LTM)
+```
+
+Override host/port in `.env`:
+```
+DASHBOARD_HOST=127.0.0.1
+DASHBOARD_PORT=8800
+```
+
+## Run (CLI / terminal REPL)
 
 ```bash
 cd memory_log

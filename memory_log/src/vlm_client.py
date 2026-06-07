@@ -1,10 +1,12 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from typing import Iterator
 
 import numpy as np
 from openai import OpenAI
 from providers.ollama import chat as ollama_chat
+from providers.ollama import chat_stream as ollama_chat_stream
 
 from src.config import Config
 from src.utils import FrameItem, encode_frame_as_base64_jpeg
@@ -30,6 +32,16 @@ class VLMClient(ABC):
     ) -> str:
         ...
 
+    @abstractmethod
+    def answer_question_stream(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> Iterator[str]:
+        """Yield answer text tokens one by one."""
+        ...
+
 
 class OpenAIVLMClient(VLMClient):
     def __init__(
@@ -53,46 +65,7 @@ class OpenAIVLMClient(VLMClient):
         if not frames:
             return "No frames are available yet. Wait a few seconds and ask again."
 
-        content: list[dict] = [
-            {
-                "type": "input_text",
-                "text": (
-                    f"You are answering questions about {self.feed_description}. "
-                    "Use only the visual evidence in the provided recent frames. "
-                    "If the answer is uncertain or not visible, say that clearly. "
-                    "Be concise but specific.\n\n"
-                    f"User question: {question}"
-                ),
-            }
-        ]
-
-        for i, frame in enumerate(frames):
-            if frame_items and i < len(frame_items):
-                age_sec = time.time() - frame_items[i].timestamp
-                content.append(
-                    {
-                        "type": "input_text",
-                        "text": (
-                            f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago."
-                        ),
-                    }
-                )
-            else:
-                content.append(
-                    {
-                        "type": "input_text",
-                        "text": f"Frame {i + 1}.",
-                    }
-                )
-
-            b64 = encode_frame_as_base64_jpeg(frame)
-            content.append(
-                {
-                    "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{b64}",
-                }
-            )
-
+        content = self._build_content(question, frames, frame_items)
         logger.info(
             "Calling VLM model=%s for Q&A with %d frame(s)", self.model, len(frames)
         )
@@ -106,6 +79,59 @@ class OpenAIVLMClient(VLMClient):
             ],
         )
         return response.output_text
+
+    def answer_question_stream(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> Iterator[str]:
+        if not frames:
+            yield "No frames are available yet. Wait a few seconds and ask again."
+            return
+
+        content = self._build_content(question, frames, frame_items)
+        logger.info(
+            "Streaming VLM model=%s for Q&A with %d frame(s)", self.model, len(frames)
+        )
+        with self.client.responses.stream(
+            model=self.model,
+            input=[{"role": "user", "content": content}],
+        ) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    yield event.delta
+
+    def _build_content(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None,
+    ) -> list[dict]:
+        """Shared content-building logic for both streaming and non-streaming calls."""
+        content: list[dict] = [
+            {
+                "type": "input_text",
+                "text": (
+                    f"You are answering questions about {self.feed_description}. "
+                    "Use only the visual evidence in the provided recent frames. "
+                    "If the answer is uncertain or not visible, say that clearly. "
+                    "Be concise but specific.\n\n"
+                    f"User question: {question}"
+                ),
+            }
+        ]
+        for i, frame in enumerate(frames):
+            if frame_items and i < len(frame_items):
+                age_sec = time.time() - frame_items[i].timestamp
+                content.append(
+                    {"type": "input_text", "text": f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago."}
+                )
+            else:
+                content.append({"type": "input_text", "text": f"Frame {i + 1}."})
+            b64 = encode_frame_as_base64_jpeg(frame)
+            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"})
+        return content
 
 
 class OllamaVLMClient(VLMClient):
@@ -166,6 +192,43 @@ class OllamaVLMClient(VLMClient):
                     "images": images,
                 }
             ],
+            base_url=self.base_url,
+        )
+
+    def answer_question_stream(
+        self,
+        question: str,
+        frames: list[np.ndarray],
+        frame_items: list[FrameItem] | None = None,
+    ) -> Iterator[str]:
+        if not frames:
+            yield "No frames are available yet. Wait a few seconds and ask again."
+            return
+
+        prompt_parts = [
+            (
+                f"You are answering questions about {self.feed_description}. "
+                "Use only the visual evidence in the provided recent frames. "
+                "If the answer is uncertain or not visible, say that clearly. "
+                "Be concise but specific."
+            ),
+            f"User question: {question}",
+        ]
+        images: list[str] = []
+        for i, frame in enumerate(frames):
+            if frame_items and i < len(frame_items):
+                age_sec = time.time() - frame_items[i].timestamp
+                prompt_parts.append(f"Frame {i + 1}: captured about {age_sec:.1f} seconds ago.")
+            else:
+                prompt_parts.append(f"Frame {i + 1}.")
+            images.append(encode_frame_as_base64_jpeg(frame))
+
+        logger.info(
+            "Streaming Ollama model=%s for Q&A with %d frame(s)", self.model, len(frames)
+        )
+        yield from ollama_chat_stream(
+            model=self.model,
+            messages=[{"role": "user", "content": "\n\n".join(prompt_parts), "images": images}],
             base_url=self.base_url,
         )
 

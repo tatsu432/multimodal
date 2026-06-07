@@ -38,7 +38,11 @@ uv run python -m src.main
 cd memory_log
 uv run python -m src.main
 
-# Phase 2 (combined) — live QA + passive background memory (wearable "on" switch)
+# Phase 2 (browser dashboard — recommended)
+cd memory_log
+uv run python -m src.dashboard              # open http://127.0.0.1:8800/ — live frame + Live QA + LTM query
+
+# Phase 2 (combined CLI) — live QA + passive background memory (wearable "on" switch)
 cd memory_log
 uv run python -m src.run_all                # both together
 uv run python -m src.run_all --no-passive   # QA only (same as src.main)

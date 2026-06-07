@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="blue">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory_log dashboard</title>
+  <style>
+    /* ── CSS variables ─────────────────────────────────────────────
+       Shared status tokens never change across themes.
+       Structural neutrals are the same for blue/teal; slate can
+       override borders if needed but currently shares them too.
+       Accent family is the only thing that differs per theme.
+    ──────────────────────────────────────────────────────────────── */
+    :root {
+      /* status — constant */
+      --ok:    #22c55e;
+      --ready: #4ade80;
+      --alert: #f59e0b;
+      --error: #f87171;
+
+      /* neutrals */
+      --bg:          #0e1117;
+      --surface:     #161b22;
+      --surface-2:   #1c2230;
+      --border:      #262d3a;
+      --border-str:  #30363d;
+      --text:        #e6edf3;
+      --text-muted:  #8b949e;
+      --text-faint:  #6e7681;
+      --scroll:      #30363d;
+      --scroll-hov:  #3d444d;
+
+      /* accent family — blue (default) */
+      --accent:        #58a6ff;
+      --accent-str:    #1f6feb;
+      --accent-hov:    #388bfd;
+      --accent-bg:     #13233d;
+      --accent-bdr:    #1f3a5f;
+      --user-bg:       #1f6feb;
+      --user-text:     #ffffff;
+      --trace-store:   #58a6ff;
+      --trace-method:  #8b949e;
+    }
+
+    [data-theme="teal"] {
+      --accent:        #2dd4bf;
+      --accent-str:    #14b8a6;
+      --accent-hov:    #2dd4bf;
+      --accent-bg:     #0c2e2a;
+      --accent-bdr:    #115e56;
+      --user-bg:       #0f766e;
+      --user-text:     #ccfbf1;
+      --trace-store:   #2dd4bf;
+      --trace-method:  #8b949e;
+    }
+
+    [data-theme="slate"] {
+      --accent:        #c9d1d9;
+      --accent-str:    #21262d;
+      --accent-hov:    #30363d;
+      --accent-bg:     #21262d;
+      --accent-bdr:    #30363d;
+      --user-bg:       #21262d;
+      --user-text:     #e6edf3;
+      --trace-store:   #c9d1d9;
+      --trace-method:  #8b949e;
+    }
+
+    /* ── reset + base ──────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── header ────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.55rem 1rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 0.95rem; font-weight: 600; color: var(--accent); }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--ok);
+      animation: pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .header-status { font-size: 0.72rem; color: var(--text-faint); margin-left: auto; }
+
+    /* theme selector */
+    .theme-select {
+      font-size: 0.72rem;
+      padding: 0.18rem 0.4rem;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .theme-select:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── main layout ───────────────────────────────────────────────── */
+    .main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+    /* ── left sidebar: live frame ──────────────────────────────────── */
+    .sidebar {
+      width: 300px;
+      min-width: 200px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0.75rem;
+      gap: 0.5rem;
+      overflow: hidden;
+    }
+    .sidebar-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+    .frame-box {
+      background: #000;
+      border-radius: 6px;
+      overflow: hidden;
+      aspect-ratio: 4/3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+    .frame-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .frame-meta { font-size: 0.7rem; color: var(--text-faint); line-height: 1.6; }
+    .frame-meta .ok  { color: var(--ok); }
+    .frame-meta .err { color: var(--error); }
+
+    /* ── right: tab content ────────────────────────────────────────── */
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+    /* tabs */
+    .tab-bar {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      padding: 0.55rem 1rem;
+      font-size: 0.82rem;
+      cursor: pointer;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      user-select: none;
+      transition: color .15s;
+    }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+
+    /* panels */
+    .panel { flex: 1; display: none; flex-direction: column; overflow: hidden; min-height: 0; }
+    .panel.active { display: flex; }
+
+    /* ── input row ─────────────────────────────────────────────────── */
+    .input-row {
+      display: flex;
+      gap: 0.4rem;
+      padding: 0.6rem 0.75rem;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      background: var(--surface);
+    }
+    .input-row textarea {
+      flex: 1;
+      background: var(--surface-2);
+      border: 1px solid var(--border-str);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0.45rem 0.7rem;
+      font-size: 0.82rem;
+      font-family: inherit;
+      resize: none;
+      height: 38px;
+      line-height: 1.5;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .input-row textarea:focus { border-color: var(--accent-str); }
+    .input-row button {
+      padding: 0 1rem;
+      background: var(--accent-str);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      white-space: nowrap;
+      transition: background .15s, opacity .15s;
+    }
+    .input-row button:hover:not(:disabled) { background: var(--accent-hov); }
+    .input-row button:disabled { opacity: .38; cursor: not-allowed; }
+
+    /* ── chat log (Live QA) ────────────────────────────────────────── */
+    .chat-log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .msg {
+      max-width: 82%;
+      padding: 0.45rem 0.7rem;
+      border-radius: 8px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      color: var(--user-text);
+      border-bottom-right-radius: 2px;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 2px;
+    }
+    .msg.assistant.thinking { color: var(--text-muted); font-style: italic; }
+    .msg-caption {
+      font-size: 0.67rem;
+      color: var(--text-faint);
+      margin-top: 0.3rem;
+    }
+
+    /* ── LTM panel ─────────────────────────────────────────────────── */
+    .ltm-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+    .ltm-query-label {
+      align-self: flex-start;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--accent);
+      padding: 0.35rem 0.6rem;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-bdr);
+      border-radius: 6px;
+    }
+
+    /* stage cards */
+    .stage-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .stage-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.45rem 0.7rem;
+      cursor: pointer;
+      user-select: none;
+      gap: 0.5rem;
+    }
+    .stage-header:hover { background: var(--surface); }
+    .stage-title { font-size: 0.78rem; font-weight: 600; color: var(--accent); }
+    .stage-badge {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      padding: 0.1rem 0.4rem;
+      background: var(--surface);
+      border-radius: 3px;
+    }
+    .stage-toggle { font-size: 0.65rem; color: var(--text-faint); transition: transform .15s; }
+    .stage-toggle.open { transform: rotate(180deg); }
+
+    .stage-body { padding: 0.5rem 0.7rem; display: none; }
+    .stage-body.visible { display: block; }
+
+    /* planner / retrieval rows */
+    .kv-row { display: flex; gap: 0.5rem; padding: 0.15rem 0; font-size: 0.78rem; }
+    .kv-key { color: var(--text-muted); min-width: 96px; flex-shrink: 0; }
+    .kv-val { color: var(--text); word-break: break-all; }
+
+    /* retrieval trace */
+    .trace-header { font-size: 0.67rem; color: var(--text-faint); padding-bottom: 0.3rem; margin-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+    .trace-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.45rem;
+      padding: 0.18rem 0;
+      font-size: 0.76rem;
+    }
+    .trace-store  { color: var(--trace-store);  min-width: 170px; }
+    .trace-method { color: var(--trace-method); }
+    .trace-count  { color: var(--ready); }
+    .trace-note   { color: var(--alert); font-size: 0.68rem; }
+
+    .reason-row { font-size: 0.73rem; color: var(--ready); padding: 0.12rem 0; }
+    .warn-row   { font-size: 0.73rem; color: var(--alert); padding: 0.12rem 0; }
+
+    /* answer text */
+    .answer-body { font-size: 0.82rem; line-height: 1.65; color: var(--text); white-space: pre-wrap; }
+    .answer-cursor {
+      display: inline-block;
+      width: 2px; height: 0.9em;
+      background: var(--accent);
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+      margin-left: 1px;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* ── scrollbar ──────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hov); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="live-dot" id="liveDot"></div>
+  <h1>🧠 memory_log dashboard</h1>
+  <span class="header-status" id="headerStatus">connecting…</span>
+  <select class="theme-select" id="themeSelect" title="Color theme">
+    <option value="blue">🎨 Blue</option>
+    <option value="teal">🎨 Teal</option>
+    <option value="slate">🎨 Slate</option>
+  </select>
+</header>
+
+<div class="main">
+
+  <!-- ── Left sidebar: live frame ─────────────────────────────── -->
+  <aside class="sidebar">
+    <span class="sidebar-label">📹 Live Frame</span>
+    <div class="frame-box">
+      <img id="liveFrame" src="/frame.mjpeg" alt="live camera feed">
+    </div>
+    <div class="frame-meta" id="frameMeta">Loading…</div>
+  </aside>
+
+  <!-- ── Right: tabs ──────────────────────────────────────────── -->
+  <div class="content">
+    <div class="tab-bar">
+      <div class="tab-btn active" id="tabLiveQA"     onclick="switchTab('qa')">💬 Live QA</div>
+      <div class="tab-btn"        id="tabLTM"        onclick="switchTab('ltm')">🔍 Long-term Memory</div>
+    </div>
+
+    <!-- Live QA panel -->
+    <div class="panel active" id="panelQA">
+      <div class="chat-log" id="chatLog">
+        <div class="msg assistant">Ask a question about the current camera view to get started.</div>
+      </div>
+      <div class="input-row">
+        <textarea id="qaInput" placeholder="Ask about the current view…"
+                  onkeydown="onEnter(event,'qa')"></textarea>
+        <button id="qaSendBtn" onclick="sendQA()">Send</button>
+      </div>
+    </div>
+
+    <!-- Long-term Memory panel -->
+    <div class="panel" id="panelLTM">
+      <div class="ltm-scroll" id="ltmScroll">
+        <div class="msg assistant" style="align-self:flex-start">
+          Ask about your past visual memories — e.g. "Where was I yesterday?" or "What did I see near the desk?"
+        </div>
+      </div>
+      <div class="input-row">
+        <textarea id="ltmInput" placeholder="Ask about past memories…"
+                  onkeydown="onEnter(event,'ltm')"></textarea>
+        <button id="ltmSendBtn" onclick="sendLTM()">Search</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ── theme switcher ──────────────────────────────────────────── */
+const themeSelect = document.getElementById('themeSelect');
+(function initTheme() {
+  const t = localStorage.getItem('dashboard-theme') || 'blue';
+  document.documentElement.setAttribute('data-theme', t);
+  themeSelect.value = t;
+})();
+themeSelect.addEventListener('change', () => {
+  const t = themeSelect.value;
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('dashboard-theme', t);
+});
+
+/* ── utilities ───────────────────────────────────────────────── */
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function onEnter(e, mode) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    mode === 'qa' ? sendQA() : sendLTM();
+  }
+}
+
+/* ── tab switching ───────────────────────────────────────────── */
+function switchTab(tab) {
+  document.getElementById('panelQA').classList.toggle('active', tab === 'qa');
+  document.getElementById('panelLTM').classList.toggle('active', tab === 'ltm');
+  document.getElementById('tabLiveQA').classList.toggle('active', tab === 'qa');
+  document.getElementById('tabLTM').classList.toggle('active', tab === 'ltm');
+}
+
+/* ── live frame ──────────────────────────────────────────────── */
+const liveFrame = document.getElementById('liveFrame');
+const frameMeta = document.getElementById('frameMeta');
+const headerStatus = document.getElementById('headerStatus');
+const liveDot = document.getElementById('liveDot');
+let mjpegRetries = 0;
+
+liveFrame.addEventListener('load', () => {
+  frameMeta.innerHTML = '<span class="ok">● Connected</span>';
+  headerStatus.textContent = 'live';
+  liveDot.style.background = '#22c55e';
+  mjpegRetries = 0;
+});
+liveFrame.addEventListener('error', () => {
+  frameMeta.innerHTML = '<span class="err">● Reconnecting…</span>';
+  headerStatus.textContent = 'reconnecting';
+  liveDot.style.background = '#f59e0b';
+  mjpegRetries++;
+  const delay = Math.min(500 * mjpegRetries, 5000);
+  setTimeout(() => { liveFrame.src = '/frame.mjpeg?' + Date.now(); }, delay);
+});
+
+/* ── SSE stream helper ───────────────────────────────────────── */
+async function streamSSE(url, body, onEvent) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+
+    // split on blank line (SSE event boundary)
+    const parts = buf.split('\n\n');
+    buf = parts.pop(); // keep incomplete tail
+
+    for (const part of parts) {
+      let eventName = 'message';
+      let dataStr = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+        else if (line.startsWith('data: '))  dataStr  = line.slice(6);
+      }
+      if (dataStr) {
+        try { onEvent(eventName, JSON.parse(dataStr)); }
+        catch (e) { console.error('SSE parse error', e, dataStr); }
+      }
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LIVE QA
+═══════════════════════════════════════════════════════════════ */
+let qaInFlight = false;
+
+function sendQA() {
+  if (qaInFlight) return;
+  const inp = document.getElementById('qaInput');
+  const q = inp.value.trim();
+  if (!q) return;
+  inp.value = '';
+  setQABusy(true);
+
+  const log = document.getElementById('chatLog');
+
+  // user bubble
+  const userEl = document.createElement('div');
+  userEl.className = 'msg user';
+  userEl.textContent = q;
+  log.appendChild(userEl);
+  scrollBottom(log);
+
+  // assistant bubble (thinking)
+  const asstEl = document.createElement('div');
+  asstEl.className = 'msg assistant thinking';
+  const textEl = document.createElement('span');
+  textEl.className = 'answer-body';
+  textEl.textContent = 'thinking…';
+  asstEl.appendChild(textEl);
+  log.appendChild(asstEl);
+  scrollBottom(log);
+
+  let firstToken = true;
+  const cursor = document.createElement('span');
+  cursor.className = 'answer-cursor';
+
+  streamSSE('/api/qa/stream', { question: q }, (ev, d) => {
+    if (ev === 'token') {
+      if (firstToken) {
+        textEl.textContent = '';
+        asstEl.classList.remove('thinking');
+        textEl.appendChild(cursor);
+        firstToken = false;
+      }
+      // insert text before cursor
+      textEl.insertBefore(document.createTextNode(d.text), cursor);
+      scrollBottom(log);
+    } else if (ev === 'done') {
+      cursor.remove();
+      if (firstToken) { textEl.textContent = '(no response)'; asstEl.classList.remove('thinking'); }
+      const cap = document.createElement('div');
+      cap.className = 'msg-caption';
+      const parts = [];
+      if (d.location) parts.push('📍 ' + d.location);
+      if (d.latency_s != null) parts.push('⏱ ' + d.latency_s + 's');
+      if (d.frame_count) parts.push('🖼 ' + d.frame_count + ' frame' + (d.frame_count > 1 ? 's' : ''));
+      cap.textContent = parts.join('  ');
+      asstEl.appendChild(cap);
+      setQABusy(false);
+      scrollBottom(log);
+    } else if (ev === 'error') {
+      cursor.remove();
+      textEl.textContent = '⚠ ' + d.message;
+      asstEl.classList.remove('thinking');
+      setQABusy(false);
+      scrollBottom(log);
+    }
+  }).catch(err => {
+    cursor.remove();
+    textEl.textContent = '⚠ Connection error: ' + err.message;
+    asstEl.classList.remove('thinking');
+    setQABusy(false);
+  });
+}
+
+function setQABusy(busy) {
+  qaInFlight = busy;
+  document.getElementById('qaSendBtn').disabled = busy;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LONG-TERM MEMORY
+═══════════════════════════════════════════════════════════════ */
+let ltmInFlight = false;
+
+function sendLTM() {
+  if (ltmInFlight) return;
+  const inp = document.getElementById('ltmInput');
+  const q = inp.value.trim();
+  if (!q) return;
+  inp.value = '';
+  setLTMBusy(true);
+
+  const scroll = document.getElementById('ltmScroll');
+
+  // query label
+  const qLabel = document.createElement('div');
+  qLabel.className = 'ltm-query-label';
+  qLabel.textContent = '🔍 ' + q;
+  scroll.appendChild(qLabel);
+
+  // 3 stage cards
+  const plannerCard   = makeStageCard('📋 Query Planner',  'waiting…');
+  const retrieverCard = makeStageCard('🗂 Retrieval',       'waiting…');
+  const answerCard    = makeStageCard('💬 Answer',         '');
+
+  scroll.appendChild(plannerCard.el);
+  scroll.appendChild(retrieverCard.el);
+  scroll.appendChild(answerCard.el);
+  scrollBottom(scroll);
+
+  let answerStarted = false;
+  const answerText = answerCard.body.querySelector('.answer-body');
+  const answerCursor = document.createElement('span');
+  answerCursor.className = 'answer-cursor';
+
+  streamSSE('/api/ltm/stream', { query: q }, (ev, d) => {
+    if (ev === 'plan') {
+      renderPlan(plannerCard.body, d);
+      openStage(plannerCard);
+    } else if (ev === 'grounding') {
+      appendGrounding(plannerCard.body, d);
+    } else if (ev === 'retrieval') {
+      renderRetrieval(retrieverCard.body, d);
+      openStage(retrieverCard);
+    } else if (ev === 'token') {
+      if (!answerStarted) {
+        answerText.textContent = '';
+        answerText.appendChild(answerCursor);
+        openStage(answerCard);
+        answerStarted = true;
+      }
+      answerText.insertBefore(document.createTextNode(d.text), answerCursor);
+    } else if (ev === 'done') {
+      answerCursor.remove();
+      if (!answerStarted) { answerText.textContent = '(no answer generated)'; openStage(answerCard); }
+      const cap = document.createElement('div');
+      cap.style.cssText = 'font-size:.67rem;color:var(--text-faint);margin-top:.35rem;';
+      cap.textContent = '⏱ ' + d.latency_s + 's total';
+      answerCard.body.appendChild(cap);
+      setLTMBusy(false);
+    } else if (ev === 'error') {
+      answerCursor.remove();
+      answerText.textContent = '⚠ ' + d.message;
+      openStage(answerCard);
+      setLTMBusy(false);
+    }
+    scrollBottom(scroll);
+  }).catch(err => {
+    answerCursor.remove();
+    answerText.textContent = '⚠ Connection error: ' + err.message;
+    openStage(answerCard);
+    setLTMBusy(false);
+  });
+}
+
+function setLTMBusy(busy) {
+  ltmInFlight = busy;
+  document.getElementById('ltmSendBtn').disabled = busy;
+}
+
+/* ── stage card helpers ──────────────────────────────────────── */
+function makeStageCard(title, waitingText) {
+  const el = document.createElement('div');
+  el.className = 'stage-card';
+
+  const header = document.createElement('div');
+  header.className = 'stage-header';
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'stage-title';
+  titleEl.textContent = title;
+
+  const badge = document.createElement('span');
+  badge.className = 'stage-badge';
+  badge.textContent = 'waiting';
+
+  const toggle = document.createElement('span');
+  toggle.className = 'stage-toggle';
+  toggle.textContent = '▼';
+
+  header.appendChild(titleEl);
+  header.appendChild(badge);
+  header.appendChild(toggle);
+
+  const body = document.createElement('div');
+  body.className = 'stage-body';
+  if (waitingText) {
+    const span = document.createElement('span');
+    span.style.cssText = 'color:var(--text-faint);font-style:italic;font-size:.75rem;';
+    span.textContent = waitingText;
+    body.appendChild(span);
+  } else {
+    const aBody = document.createElement('div');
+    aBody.className = 'answer-body';
+    body.appendChild(aBody);
+  }
+
+  header.addEventListener('click', () => {
+    body.classList.toggle('visible');
+    toggle.classList.toggle('open', body.classList.contains('visible'));
+  });
+
+  el.appendChild(header);
+  el.appendChild(body);
+  return { el, header, body, badge, toggle };
+}
+
+function openStage(card) {
+  card.body.classList.add('visible');
+  card.toggle.classList.add('open');
+  card.badge.textContent = 'ready';
+  card.badge.style.color = '#4ade80';
+}
+
+/* ── planner render ──────────────────────────────────────────── */
+function renderPlan(body, d) {
+  body.innerHTML = '';
+
+  const rows = [
+    ['intent', d.intent],
+    d.time_range
+      ? ['time range', (d.time_range.start||'?').slice(0,16) + ' → ' + (d.time_range.end||'?').slice(0,16)]
+      : null,
+    d.semantic_query ? ['semantic',  d.semantic_query] : null,
+    d.location_filter
+      ? ['location', '(' + (d.location_filter.lat||0).toFixed(4) + ', ' + (d.location_filter.lon||0).toFixed(4) + ') ±' + d.location_filter.radius_m + 'm']
+      : null,
+    ['stores', (d.stores||[]).join(', ')],
+    ['visual grounding', d.needs_grounding ? 'yes' : 'no'],
+    ['retrieve frames',  d.needs_frames    ? 'yes' : 'no'],
+  ].filter(Boolean);
+
+  for (const [k, v] of rows) {
+    const row = document.createElement('div');
+    row.className = 'kv-row';
+    row.innerHTML = '<span class="kv-key">' + esc(k) + '</span><span class="kv-val">' + esc(v) + '</span>';
+    body.appendChild(row);
+  }
+}
+
+function appendGrounding(body, d) {
+  const row = document.createElement('div');
+  row.className = 'kv-row';
+  row.innerHTML = '<span class="kv-key">current scene</span><span class="kv-val">' + esc(d.scene||'') + '</span>';
+  body.appendChild(row);
+  if ((d.objects||[]).length) {
+    const row2 = document.createElement('div');
+    row2.className = 'kv-row';
+    row2.innerHTML = '<span class="kv-key">objects</span><span class="kv-val">' + esc(d.objects.join(', ')) + '</span>';
+    body.appendChild(row2);
+  }
+}
+
+/* ── retrieval render ────────────────────────────────────────── */
+function renderRetrieval(body, d) {
+  body.innerHTML = '';
+
+  const hdr = document.createElement('div');
+  hdr.className = 'trace-header';
+  hdr.textContent = 'store · method · candidates → results';
+  body.appendChild(hdr);
+
+  for (const t of (d.stores||[])) {
+    const row = document.createElement('div');
+    row.className = 'trace-row';
+    const cand = (t.candidate_count != null)
+      ? t.candidate_count + '→' + t.final
+      : String(t.final);
+    let html = '<span class="trace-store">' + esc(t.store) + '</span>'
+             + '<span class="trace-method">' + esc(t.method) + '</span>'
+             + '<span class="trace-count">' + esc(cand) + '</span>';
+    if (t.note) html += '<span class="trace-note">' + esc(t.note) + '</span>';
+    row.innerHTML = html;
+    body.appendChild(row);
+  }
+
+  if (d.expanded) {
+    const exp = document.createElement('div');
+    exp.className = 'warn-row';
+    exp.textContent = '↩ time range expanded (no results in original window)';
+    body.appendChild(exp);
+  }
+
+  for (const r of (d.evidence_reasons||[])) {
+    const el = document.createElement('div');
+    el.className = 'reason-row';
+    el.textContent = '✓ ' + r;
+    body.appendChild(el);
+  }
+  for (const n of (d.uncertainty_notes||[])) {
+    const el = document.createElement('div');
+    el.className = 'warn-row';
+    el.textContent = '⚠ ' + n;
+    body.appendChild(el);
+  }
+}
+
+/* ── misc helpers ────────────────────────────────────────────── */
+function scrollBottom(el) {
+  // only auto-scroll if already near the bottom
+  const threshold = 120;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < threshold) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+</script>
+</body>
+</html>

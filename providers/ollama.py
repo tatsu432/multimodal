@@ -6,7 +6,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,58 @@ def chat(
     if not isinstance(content, str) or not content.strip():
         raise OllamaError(f"Ollama returned empty content: {body!r}")
     return content.strip()
+
+
+def chat_stream(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    timeout_sec: float = 300.0,
+) -> Iterator[str]:
+    """Stream a chat completion from Ollama, yielding text tokens one by one.
+
+    Uses POST /api/chat with ``stream: True``, reading NDJSON lines.
+    Raises OllamaError on connection or HTTP failure.
+    """
+    url = base_url.rstrip("/") + "/api/chat"
+    payload = json.dumps(
+        {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    logger.info("Streaming Ollama model=%s at %s", model, base_url)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                content = (chunk.get("message") or {}).get("content", "")
+                if content:
+                    yield content
+                if chunk.get("done"):
+                    break
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise OllamaError(f"Ollama HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise OllamaError(
+            f"Could not reach Ollama at {base_url}. Is it running? ({exc.reason})"
+        ) from exc
 
 
 def embeddings(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Iterator
 
 from src.config import Config
 from src.ltm_query.evidence import EvidencePack
@@ -123,7 +124,51 @@ class AnswerGenerator:
             {"role": "user", "content": evidence_text},
         ]
         return ollama_chat(
-            self._config.vlm_model,
-            messages,
+            model=self._config.vlm_model,
+            messages=messages,
             base_url=self._config.ollama_base_url,
         ).strip()
+
+    def generate_stream(self, evidence: EvidencePack) -> Iterator[str]:
+        """Yield answer text tokens one by one."""
+        evidence_text = format_evidence(evidence)
+        logger.info(
+            "Streaming answer: evidence_prompt_chars=%d events=%d active_queries=%d",
+            len(evidence_text),
+            len(evidence.promoted_events),
+            len(evidence.active_queries),
+        )
+        try:
+            if self._config.vlm_provider == "openai":
+                yield from self._stream_openai(evidence_text)
+            else:
+                yield from self._stream_ollama(evidence_text)
+        except Exception as exc:
+            logger.error("Answer stream failed: %s", exc)
+            yield f"\n[Error generating answer: {exc}]"
+
+    def _stream_openai(self, evidence_text: str) -> Iterator[str]:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self._config.openai_api_key)
+        with client.responses.stream(
+            model=self._config.vlm_model,
+            instructions=_ANSWER_SYSTEM_PROMPT,
+            input=evidence_text,
+        ) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    yield event.delta
+
+    def _stream_ollama(self, evidence_text: str) -> Iterator[str]:
+        from providers.ollama import chat_stream as ollama_chat_stream
+
+        messages = [
+            {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
+            {"role": "user", "content": evidence_text},
+        ]
+        yield from ollama_chat_stream(
+            model=self._config.vlm_model,
+            messages=messages,
+            base_url=self._config.ollama_base_url,
+        )

@@ -96,6 +96,11 @@ class Config:
     embed_auto_backfill: bool
     chroma_path: Path
     embedding_timeout_sec: float
+    # Dashboard web UI
+    dashboard_host: str
+    dashboard_port: int
+    dashboard_cert: Path | None
+    dashboard_key: Path | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -257,6 +262,10 @@ class Config:
             embed_auto_backfill=parse_bool_env(os.getenv("EMBED_AUTO_BACKFILL", "true")),
             chroma_path=chroma_path,
             embedding_timeout_sec=float(os.getenv("EMBEDDING_TIMEOUT_SEC", "30")),
+            dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1").strip(),
+            dashboard_port=int(os.getenv("DASHBOARD_PORT", "8800")),
+            dashboard_cert=_optional_path(os.getenv("DASHBOARD_CERT", "")),
+            dashboard_key=_optional_path(os.getenv("DASHBOARD_KEY", "")),
         )
 
     def validate(self) -> None:
