@@ -44,6 +44,8 @@ uv run python -m src.run_all                # both together
 uv run python -m src.run_all --no-passive   # QA only (same as src.main)
 uv run python -m src.passive_observer       # passive only
 uv run python -m src.ltm_query              # long-term memory query REPL
+uv run python -m src.embed_index            # backfill ChromaDB vector index (new rows)
+uv run python -m src.embed_index --force    # re-embed all rows (after model switch)
 ```
 
 Each package reads config from its local `.env` (copy from `.env.example` and set `OPENAI_API_KEY`).
@@ -72,6 +74,7 @@ vlm_smoke/src/    OR    memory_log/src/
 3. `resolve_location()` picks location from config or live phone GPS sidecar
 4. `GeocodeClient` reverse-geocodes lat/lon via Nominatim (SQLite cache at `outputs/geocode_cache.sqlite`)
 5. `MemoryWriter.save_memory()` appends to `outputs/memories.jsonl` and saves frame JPEGs
+6. `SQLiteWriter.write_active_query_with_event()` persists to SQLite, then `MemoryIndexer.index_pair()` embeds `semantic_search_text` into ChromaDB (non-fatal; `EMBED_ON_WRITE=true`)
 
 ## Key environment variables
 
@@ -87,6 +90,11 @@ vlm_smoke/src/    OR    memory_log/src/
 | `LOCATION_SERVER_ENABLED` | memory_log | start HTTPS GPS sidecar for phone |
 | `GEOCODE_ENABLED` | memory_log | Nominatim reverse geocode (default `true`) |
 | `RTSP_FFMPEG_LOG` | both | path for FFmpeg + app logs (keeps REPL clean) |
+| `VECTOR_SEARCH_ENABLED` | memory_log | ChromaDB semantic search (default `true`; LIKE fallback when off) |
+| `EMBEDDING_PROVIDER` | memory_log | `ollama` (default, local) or `openai` |
+| `EMBEDDING_MODEL` | memory_log | default: `nomic-embed-text` / `text-embedding-3-small` per provider |
+| `EMBED_ON_WRITE` | memory_log | embed new memories at write time (default `true`) |
+| `CHROMA_PATH` | memory_log | ChromaDB directory (default `outputs/chroma`) |
 
 ## Camera sources
 
@@ -110,3 +118,9 @@ LTM queries are logged to a **separate** `outputs/long_term_query_logs.sqlite` (
 ```bash
 sqlite3 memory_log/outputs/long_term_query_logs.sqlite "SELECT user_query, intent, latency_total_ms FROM long_term_query_logs ORDER BY timestamp_utc DESC LIMIT 5;"
 ```
+
+Vector index is stored in `outputs/chroma/` (model-namespaced ChromaDB collections). Backfill or reindex with:
+```bash
+cd memory_log && uv run python -m src.embed_index
+```
+`text_embedding_id` on `promoted_events` / `active_query_memories` / `daily_summaries` holds the ChromaDB doc id (= the row PK) when indexed.

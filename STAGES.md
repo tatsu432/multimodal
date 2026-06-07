@@ -370,16 +370,40 @@ Example queries:
 ### Current limitations
 
 - `scene_summary` for promoted events uses `model_answer` as a weak proxy (no dedicated VLM call).
-- Semantic retrieval uses SQLite `LIKE` keyword search — no vector embeddings yet. Code is structured for later ChromaDB plug-in.
 - Visual grounding requires a live camera connection for "this/here" queries.
 - Passive observation pHash requires `imagehash` (already in dependencies).
+- Image embeddings (`image_embedding_id` columns) are reserved but not implemented (v1 scope: text only).
 
-### 5. Later
+### 6. Vector / semantic search — `src/embeddings.py`, `src/vector_index.py`, `src/embed_index.py`
+
+**Status: implemented**
+
+Real semantic similarity search via **ChromaDB** with a dual embedding provider:
+- **Ollama** (default, no API key): `nomic-embed-text`, local `/api/embed`
+- **OpenAI** (optional): `text-embedding-3-small`
+
+Collections are **model-namespaced** (`<store>__<model_slug>`) inside `outputs/chroma/`, so
+switching providers never collides — a reindex just builds new collections.
+SQLite remains the source of truth; Chroma is the ANN + metadata-filter engine.
+
+```bash
+# Pull the default embedding model (Ollama path)
+ollama pull nomic-embed-text
+
+# Backfill existing rows into ChromaDB
+cd memory_log && uv run python -m src.embed_index          # new rows only
+uv run python -m src.embed_index --force                   # re-embed all
+uv run python -m src.embed_index --store promoted_events   # one store
+```
+
+Graceful fallback: `VECTOR_SEARCH_ENABLED=false` (or Ollama down) → queries revert to
+SQLite `LIKE` keyword search with no error.
+
+### 7. Later
 
 After core memory layers exist:
 
 - **Evaluation suite** — latency, retrieval quality, answer correctness, hallucination rate
-- **Vector retrieval** — plug in ChromaDB or SQLite VSS for `semantic_search_text` embeddings
 - **Service separation** — API workers, ingestion workers, query service
 - **UI** — demo-facing interface for live and memory questions
 

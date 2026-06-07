@@ -278,11 +278,19 @@ def main() -> None:
     vlm = create_vlm_client(config)
     writer = MemoryWriter(config)
 
+    indexer = None
+    if config.vector_search_enabled:
+        try:
+            from src.vector_index import create_memory_indexer
+            indexer = create_memory_indexer(config)
+        except Exception as exc:
+            logger.warning("Could not create memory indexer: %s", exc)
+
     db_writer: SQLiteWriter | None = None
     try:
         conn = open_db(config.memory_db_path)
         from src.config import PROJECT_ROOT
-        db_writer = SQLiteWriter(conn, PROJECT_ROOT)
+        db_writer = SQLiteWriter(conn, PROJECT_ROOT, indexer=indexer)
         logger.info("SQLite memory DB opened: %s", config.memory_db_path)
     except Exception as exc:
         logger.warning("Could not open SQLite memory DB (JSONL-only mode): %s", exc)

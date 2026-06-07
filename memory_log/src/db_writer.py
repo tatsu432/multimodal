@@ -13,6 +13,10 @@ import numpy as np
 
 from src.schema import LocationInfo, MemoryRecord
 from src.utils import FrameItem, frame_capture_timestamp_iso, relative_path, save_frame_image
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.vector_index import MemoryIndexer
 
 logger = logging.getLogger("memory_log.db_writer")
 
@@ -80,10 +84,16 @@ def _build_semantic_search_text(
 
 
 class SQLiteWriter:
-    def __init__(self, conn: sqlite3.Connection, project_root: Path) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        project_root: Path,
+        indexer: "MemoryIndexer | None" = None,
+    ) -> None:
         self._conn = conn
         self._project_root = project_root
         self._lock = threading.Lock()
+        self._indexer = indexer
 
     def write_active_query_with_event(
         self,
@@ -229,6 +239,18 @@ class SQLiteWriter:
                 )
 
         logger.info("Wrote active query %s + event %s to SQLite", active_query_id, event_id)
+
+        # Embed semantic_search_text outside the lock (network I/O)
+        if self._indexer is not None:
+            self._indexer.index_pair(
+                event_id=event_id,
+                active_query_id=active_query_id,
+                text=semantic_text,
+                timestamp_utc=ts_utc,
+                lat=location.lat,
+                lon=location.lon,
+            )
+
         return event_id, active_query_id
 
     def write_passive_observation(
@@ -326,3 +348,14 @@ class SQLiteWriter:
                 ),
             )
         logger.info("Wrote daily summary %s", summary_id)
+
+        # Embed semantic_search_text outside the lock (network I/O)
+        if self._indexer is not None and semantic_search_text:
+            self._indexer.index(
+                owner_table="daily_summaries",
+                owner_id=summary_id,
+                text=semantic_search_text,
+                timestamp_utc=coverage_start_utc,
+                lat=None,
+                lon=None,
+            )

@@ -243,8 +243,28 @@ def main() -> None:
         except Exception as exc:
             logger.warning("Could not open query log DB (logging disabled): %s", exc)
 
+    embedding_client = None
+    vector_index = None
+    if config.vector_search_enabled:
+        try:
+            from src.embeddings import create_embedding_client
+            from src.vector_index import ChromaVectorIndex
+
+            embedding_client = create_embedding_client(config)
+            if embedding_client is not None:
+                vector_index = ChromaVectorIndex(config.chroma_path, embedding_client.model)
+                logger.info(
+                    "Vector search enabled: provider=%s model=%s",
+                    embedding_client.provider,
+                    embedding_client.model,
+                )
+        except Exception as exc:
+            logger.warning("Vector search init failed (falling back to LIKE): %s", exc)
+
     planner = QueryPlanner(config)
-    retriever = MemoryRetriever(conn, config)
+    retriever = MemoryRetriever(
+        conn, config, embedding_client=embedding_client, vector_index=vector_index
+    )
     answer_gen = AnswerGenerator(config)
 
     grounder = None

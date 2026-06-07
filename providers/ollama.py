@@ -105,3 +105,44 @@ def chat(
     if not isinstance(content, str) or not content.strip():
         raise OllamaError(f"Ollama returned empty content: {body!r}")
     return content.strip()
+
+
+def embeddings(
+    *,
+    model: str,
+    input: list[str],
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    timeout_sec: float = 30.0,
+) -> list[list[float]]:
+    """Return text embeddings via POST /api/embed.
+
+    Returns a list of float vectors, one per input string.
+    Raises OllamaError on HTTP errors or unexpected response shape.
+    """
+    url = base_url.rstrip("/") + "/api/embed"
+    payload = json.dumps({"model": model, "input": input}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    logger.info(
+        "Calling Ollama embeddings model=%s at %s, n=%d", model, base_url, len(input)
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise OllamaError(f"Ollama embed HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise OllamaError(
+            f"Could not reach Ollama at {base_url}. Is it running? ({exc.reason})"
+        ) from exc
+
+    vectors = body.get("embeddings")
+    if not isinstance(vectors, list) or len(vectors) != len(input):
+        raise OllamaError(f"Unexpected Ollama embed response: {body!r}")
+    return vectors

@@ -234,7 +234,14 @@ def main() -> None:
 
     try:
         conn = open_db(config.memory_db_path)
-        db_writer = SQLiteWriter(conn, PROJECT_ROOT)
+        indexer = None
+        if config.vector_search_enabled:
+            try:
+                from src.vector_index import create_memory_indexer
+                indexer = create_memory_indexer(config)
+            except Exception as exc:
+                logger.warning("Could not create memory indexer: %s", exc)
+        db_writer = SQLiteWriter(conn, PROJECT_ROOT, indexer=indexer)
     except Exception as exc:
         logger.error("Could not open memory DB: %s", exc)
         sys.exit(1)

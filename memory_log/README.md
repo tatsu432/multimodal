@@ -15,12 +15,12 @@ Nothing is written to JSONL on a timer. If you do not ask a question, no new mem
 
 Each question uses **one VLM call** only. There is no second structured-analysis call after the answer.
 
-## Why JSONL before a vector DB
+## Why JSONL + SQLite + ChromaDB
 
-- **Easy to debug** — `tail -f`, `jq`, any text editor.
-- **No extra services** — no Chroma, embeddings API, or search index yet.
+- **Easy to debug** — `tail -f`, `jq`, any text editor for JSONL; standard SQLite tools for the memory DB.
+- **Local-first embeddings** — Ollama `nomic-embed-text` for semantic search with no API key required; OpenAI optional.
 - **Stable contract** — each line is self-contained, including `user_question` and `model_answer` for later search.
-- **Fail-safe progress** — lines are flushed after each write.
+- **Fail-safe progress** — lines are flushed after each write; ChromaDB indexing is non-fatal (LIKE fallback if unavailable).
 
 ## Setup with uv
 
@@ -61,6 +61,12 @@ uv sync
 | `PHONE_LOCATION_*`                               | Fallback when phone GPS sidecar is off or stale                                             |
 | `LOCATION_SERVER_*`                              | Optional HTTPS sidecar for phone GPS (see below)                                            |
 | `GEOCODE_*`, `NOMINATIM_BASE_URL`                | Reverse geocode lat/lon to address at write time (see below)                                |
+| `VECTOR_SEARCH_ENABLED`                          | `true`/`false` — use ChromaDB semantic search (default `true`, falls back to LIKE)          |
+| `EMBEDDING_PROVIDER`                             | `ollama` (default, no API key) or `openai`                                                  |
+| `EMBEDDING_MODEL`                                | default: `nomic-embed-text` (ollama) / `text-embedding-3-small` (openai)                    |
+| `EMBED_ON_WRITE`                                 | Embed new memories at write time (default `true`)                                           |
+| `CHROMA_PATH`                                    | ChromaDB directory (default `outputs/chroma`)                                               |
+| `EMBEDDING_TIMEOUT_SEC`                          | Embedding HTTP timeout in seconds (default `30`)                                            |
 
 
 ## Location metadata
@@ -275,6 +281,37 @@ Run summary:
 
 `average_vlm_latency_seconds` is the mean Q&A latency per question (single VLM call).
 
+## Vector / semantic search
+
+LTM queries use **ChromaDB** + **Ollama embeddings** (or OpenAI) to rank results by cosine
+similarity instead of keyword matching. Existing memories must be backfilled:
+
+```bash
+# One-time setup (Ollama path — no API key needed)
+ollama pull nomic-embed-text
+
+# Backfill existing rows
+cd memory_log
+uv run python -m src.embed_index           # index new rows only
+uv run python -m src.embed_index --force   # re-embed all rows
+
+# Check results
+sqlite3 outputs/memory.sqlite "SELECT count(*) FROM promoted_events WHERE text_embedding_id IS NOT NULL;"
+```
+
+New memories are embedded automatically at write time when `EMBED_ON_WRITE=true`.
+If Ollama is unavailable or `VECTOR_SEARCH_ENABLED=false`, LTM queries silently fall back
+to the SQLite `LIKE` keyword path.
+
+To switch to OpenAI embeddings:
+```env
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_API_KEY=sk-...
+```
+Then re-run `uv run python -m src.embed_index` — new model-namespaced collections
+(`<store>__text-embedding-3-small`) are created without overwriting the Ollama collections.
+
 ## Known limitations
 
 - **OpenAI + Ollama** — set `VLM_PROVIDER` / `VLM_MODEL` (Ollama needs a vision model, e.g. `llava`).
@@ -282,10 +319,8 @@ Run summary:
 - **Phone GPS** — requires HTTPS location sidecar page open on the phone.
 - **Geocoded addresses** — optional; full street addresses increase log sensitivity.
 - **Legacy JSONL** — older records with `summary`/`objects` remain readable by search tools.
-
-## Next step
-
-Keyword and time-based memory search: see `[../memory_search/README.md](../memory_search/README.md)`.
+- **Image embeddings** — `image_embedding_id` columns are reserved but not yet populated (text only in v1).
+- **Switching embedding models** requires a reindex (`embed_index --force`) — collections are model-namespaced.
 
 ## Relation to Step 1
 

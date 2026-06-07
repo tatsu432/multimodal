@@ -10,6 +10,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VALID_FRAME_SOURCE_TYPES = frozenset({"camera", "webcam", "video"})
 VALID_VLM_PROVIDERS = frozenset({"openai", "ollama"})
 VALID_GEOCODE_PROVIDERS = frozenset({"nominatim"})
+VALID_EMBEDDING_PROVIDERS = frozenset({"ollama", "openai"})
+_EMBEDDING_MODEL_DEFAULTS: dict[str, str] = {
+    "ollama": "nomic-embed-text",
+    "openai": "text-embedding-3-small",
+}
 
 
 def _optional_label(value: str) -> str | None:
@@ -83,6 +88,13 @@ class Config:
     # Long-term query logging (separate DB; excluded from retrieval)
     query_log_enabled: bool
     query_log_db_path: Path
+    # Vector / semantic search (ChromaDB + embedding provider)
+    vector_search_enabled: bool
+    embedding_provider: str
+    embedding_model: str
+    embed_on_write: bool
+    chroma_path: Path
+    embedding_timeout_sec: float
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -117,6 +129,16 @@ class Config:
         )
         if not query_log_db_path.is_absolute():
             query_log_db_path = PROJECT_ROOT / query_log_db_path
+
+        chroma_path = Path(os.getenv("CHROMA_PATH", "outputs/chroma"))
+        if not chroma_path.is_absolute():
+            chroma_path = PROJECT_ROOT / chroma_path
+
+        _emb_provider = os.getenv("EMBEDDING_PROVIDER", "ollama").strip().lower()
+        _emb_model = (
+            os.getenv("EMBEDDING_MODEL", "").strip()
+            or _EMBEDDING_MODEL_DEFAULTS.get(_emb_provider, "nomic-embed-text")
+        )
 
         passive_frame_dir = Path(
             os.getenv("PASSIVE_FRAME_DIR", "outputs/passive_frames")
@@ -225,6 +247,14 @@ class Config:
                 os.getenv("LTM_QUERY_LOG_ENABLED", "true")
             ),
             query_log_db_path=query_log_db_path,
+            vector_search_enabled=parse_bool_env(
+                os.getenv("VECTOR_SEARCH_ENABLED", "true")
+            ),
+            embedding_provider=_emb_provider,
+            embedding_model=_emb_model,
+            embed_on_write=parse_bool_env(os.getenv("EMBED_ON_WRITE", "true")),
+            chroma_path=chroma_path,
+            embedding_timeout_sec=float(os.getenv("EMBEDDING_TIMEOUT_SEC", "30")),
         )
 
     def validate(self) -> None:
@@ -296,6 +326,20 @@ class Config:
                 raise ValueError(
                     f"LOCATION_SERVER_KEY not found: {self.location_server_key}"
                 )
+
+        if self.vector_search_enabled:
+            if self.embedding_provider not in VALID_EMBEDDING_PROVIDERS:
+                raise ValueError(
+                    f"EMBEDDING_PROVIDER must be one of "
+                    f"{sorted(VALID_EMBEDDING_PROVIDERS)}, "
+                    f"got {self.embedding_provider!r}"
+                )
+            if self.embedding_provider == "openai" and not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai"
+                )
+            if self.embedding_timeout_sec <= 0:
+                raise ValueError("EMBEDDING_TIMEOUT_SEC must be positive")
 
         if self.geocode_enabled:
             if self.geocode_provider not in VALID_GEOCODE_PROVIDERS:
