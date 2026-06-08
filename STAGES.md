@@ -63,7 +63,8 @@ VLM inference (OpenAI or Ollama)
 | Long-term memory query | **Done** — `src/ltm_query/` deterministic retrieval + grounded answering | [memory_log/README.md](memory_log/README.md) |
 | Unified runner | **Done** — `src/run_all.py` wearable "on" switch (live QA + passive, shared resources) | [memory_log/README.md](memory_log/README.md) |
 | Dashboard UI | **Done** — `src/dashboard/` browser UI: live MJPEG frame + streaming Live-QA chat + LTM query panels | [memory_log/README.md](memory_log/README.md) |
-| Eval / API | **Planned** — after core memory | (this file, Future work) |
+| Eval harness | **In Progress** — `memory_log/evals/` end-to-end eval for Live QA + LTM QA | [memory_log/README.md](memory_log/README.md) |
+| Eval / API | **Planned** — service separation after eval harness | (this file, Future work) |
 
 ---
 
@@ -407,9 +408,16 @@ SQLite `LIKE` keyword search with no error.
 
 After core memory layers exist:
 
-- **Evaluation suite** — latency, retrieval quality, answer correctness, hallucination rate
+- **Evaluation suite** (mostly done) — latency, retrieval quality, answer correctness, hallucination rate
 - **Service separation** — API workers, ingestion workers, query service
-- **UI** — demo-facing interface for live and memory questions
+- **memory refinement** - Promoted Event memory is only based on active query memory, so we should first include some rule-based logic 
+- **Refine eval** Use a small set of public benchmarks
+- **goal alignment** We have to make sure whether we should set some goals first for each session
+- **instance related memory** We might have to deal with the memory about the instance, such as the identity of the person, because the current system cannot distinguish the actual instance of the object, such as you, from the other person Currently, the system is locally hosted, so we cannot use the camera outside of the local network. It would be better to separate services and expose the endpoint correctly
+- **video streaming improvement** For smartphones, the video streaming has a bit of lag, and we have to figure out how to ensure truly real-time, stable streaming
+- **edge device support** Start using the NVIDIA edge device 
+- **efficient inference** Use a vLLM or a sort of more efficient vision-language model serving, but this should require GPUs-
+- **Reserach on long term memory or efficient infernece** Research on efficient inference or long-term memory-related work
 
 ---
 
@@ -422,5 +430,5 @@ After core memory layers exist:
 3. passive_observer — background location/frame logging
 4. ltm_query        — long-term memory query CLI
 5. run_all          — combined wearable entry point (QA + passive in one process)
-6. (TBD)           — eval, services, UI
+6. (TBD)           — eval, services, and more
 ```

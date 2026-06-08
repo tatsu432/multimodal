@@ -386,6 +386,101 @@ query, including the `method + candidates → rows` line for every store.
 - **Image embeddings** — `image_embedding_id` columns are reserved but not yet populated (text only in v1).
 - **Switching embedding models** requires a reindex (`embed_index --force`) — collections are model-namespaced.
 
+## Evaluation harness
+
+An end-to-end evaluation harness lives in `evals/`. It replays pre-recorded video files
+deterministically, seeds or replays past memories into an **isolated** eval DB (production
+`outputs/memory.sqlite` is never touched), and scores answers with deterministic matching
++ an optional LLM judge rubric.
+
+### Quick start
+
+```bash
+cd memory_log
+
+# 1. Generate toy dataset (5-min synthetic video + manifest)
+uv run python -m evals.make_sample
+
+# 2. Live VQA eval (replay video → ask questions at specific timestamps)
+uv run python -m evals.run_live --manifest evals/datasets/toy/desk_001.json
+
+# 3. LTM eval — seed mode (inject structured past memories → ask recall questions)
+uv run python -m evals.run_ltm --manifest evals/datasets/toy/desk_001.json --memory-mode seed
+
+# 4. LTM eval — replay mode (ingest history video as passive observations → ask)
+uv run python -m evals.run_ltm --manifest evals/datasets/toy/desk_001.json --memory-mode replay
+
+# Options for both runners
+--model gpt-4o-mini       # override VLM_MODEL
+--limit 5                 # evaluate only first N questions
+--no-judge                # skip LLM judge (exact-match only)
+--run-id my_run           # custom run ID
+```
+
+Results are written to `evals/outputs/eval_runs.sqlite` (one row per question) and a JSON
+summary file. Console output shows a dashboard-style breakdown.
+
+### Eval manifest format
+
+Manifests are JSON files describing one eval scenario. Key fields:
+
+```json
+{
+  "video_id": "desk_001",
+  "video_path": "desk_001.mp4",
+  "base_timestamp": "2026-01-15T09:00:00+09:00",
+  "live_questions": [
+    {
+      "id": "q1", "ask_at_sec": 15.0, "question": "What is on the desk?",
+      "gold_answer": "red bottle", "answer_type": "short_text",
+      "gold_evidence_window": [10.0, 24.0]
+    }
+  ],
+  "memory_mode": "seed",
+  "seed_memories": [
+    {
+      "kind": "active_query", "timestamp": "2026-01-15T09:00:15+09:00",
+      "user_question": "...", "model_answer": "There is a red bottle on the desk."
+    }
+  ],
+  "memory_questions": [
+    {
+      "id": "m1", "question": "Where did I put the red bottle?",
+      "gold_answer": "on the shelf", "gold_evidence_windows": [[75.0, 120.0]]
+    }
+  ]
+}
+```
+
+### Public benchmark adapters
+
+Convert external benchmark datasets into the manifest format:
+
+```bash
+# StreamingBench (Live QA — MCQ with timestamps, HuggingFace)
+uv run python -m evals.adapters.streaming_bench --download --raw-dir evals/datasets/streaming_bench_raw/
+uv run python -m evals.adapters.streaming_bench --raw-dir evals/datasets/streaming_bench_raw/ --out-dir evals/datasets/streaming_bench/ --limit 50
+uv run python -m evals.run_live --manifest evals/datasets/streaming_bench/<id>.json --no-judge
+
+# EgoSchema (LTM — egocentric MCQ; videos require Ego4D access)
+uv run python -m evals.adapters.egoschema --download-qa --qa-json evals/datasets/egoschema_raw/questions.json
+uv run python -m evals.adapters.egoschema --qa-json evals/datasets/egoschema_raw/questions.json --video-dir /path/to/ego4d_clips/ --limit 20 --out-dir evals/datasets/egoschema/
+uv run python -m evals.run_ltm --manifest evals/datasets/egoschema/<uid>.json --memory-mode replay
+```
+
+Add new benchmarks by subclassing `evals.adapters.base.BenchmarkAdapter` and implementing
+`to_manifests()`. The runners are benchmark-agnostic — switching benchmarks = swapping the manifest.
+
+### Metrics
+
+| Task | Metric |
+|------|--------|
+| Live QA | `answer_accuracy`, `hallucination_rate`, `unanswerable_accuracy`, `mean_frame_age_sec`, `p50/p95_latency_ms` |
+| LTM retrieval | `Recall@1/3/5`, `MRR`, `mean_temporal_distance_sec`, `evidence_iou` |
+| LTM final answer | `answer_accuracy`, `judge_avg_score` (0-2 rubric), `hallucination flags` |
+
+---
+
 ## Relation to Step 1
 
 `vlm_smoke` is interactive QA only. `memory_log` adds persistent JSONL memories **when you ask**, using the same threaded capture model as `vlm_smoke`.

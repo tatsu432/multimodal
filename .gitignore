@@ -6,6 +6,16 @@
 # data
 *.jpg
 sampled_frames/
+*.jsonl
+
+# Eval harness — generated videos and run outputs (manifests are tracked)
+memory_log/evals/datasets/**/*.mp4
+memory_log/evals/datasets/**/*.avi
+memory_log/evals/datasets/**/*.mov
+memory_log/evals/datasets/*_raw/
+memory_log/evals/outputs/runs/
+memory_log/evals/outputs/*.sqlite
+memory_log/evals/outputs/*.sqlite-*
 
 # SQLite/cache databases
 *.sqlite

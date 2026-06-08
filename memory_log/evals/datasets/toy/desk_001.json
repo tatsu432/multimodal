@@ -1,0 +1,145 @@
+{
+  "video_id": "desk_001",
+  "video_path": "desk_001.mp4",
+  "base_timestamp": "2026-01-15T09:00:00+09:00",
+  "description": "Toy scripted desk scenario — red bottle & laptop",
+  "default_location": {
+    "label": "home desk",
+    "lat": 35.68,
+    "lon": 139.76
+  },
+  "live_questions": [
+    {
+      "id": "lq1",
+      "ask_at_sec": 15.0,
+      "question": "What object do you see on the desk?",
+      "gold_answer": "a red bottle",
+      "acceptable_answers": [
+        "red bottle",
+        "a red bottle on the desk",
+        "bottle"
+      ],
+      "answer_type": "short_text",
+      "gold_evidence_window": [
+        10.0,
+        24.0
+      ]
+    },
+    {
+      "id": "lq2",
+      "ask_at_sec": 35.0,
+      "question": "Is there a laptop visible?",
+      "gold_answer": "yes",
+      "acceptable_answers": [
+        "yes",
+        "a laptop",
+        "yes there is a laptop"
+      ],
+      "answer_type": "short_text",
+      "gold_evidence_window": [
+        25.0,
+        50.0
+      ]
+    },
+    {
+      "id": "lq3",
+      "ask_at_sec": 5.0,
+      "question": "Is there an object behind the camera that I cannot see?",
+      "gold_answer": "I cannot determine that from the visible scene",
+      "acceptable_answers": [
+        "cannot determine",
+        "not visible",
+        "I cannot see",
+        "unable to tell",
+        "I don't know"
+      ],
+      "answer_type": "unanswerable"
+    }
+  ],
+  "memory_mode": "seed",
+  "history_video_path": "desk_001.mp4",
+  "seed_memories": [
+    {
+      "kind": "active_query",
+      "timestamp": "2026-01-15T09:00:15+09:00",
+      "location": {
+        "label": "home desk",
+        "lat": 35.68,
+        "lon": 139.76
+      },
+      "user_question": "What is on the desk?",
+      "model_answer": "There is a red bottle on the left side of the desk.",
+      "camera_source": "eval_replay"
+    },
+    {
+      "kind": "active_query",
+      "timestamp": "2026-01-15T09:01:30+09:00",
+      "location": {
+        "label": "home desk",
+        "lat": 35.68,
+        "lon": 139.76
+      },
+      "user_question": "What changed on the desk?",
+      "model_answer": "The red bottle was moved from the desk to the shelf above. A laptop is now open on the right side of the desk.",
+      "camera_source": "eval_replay"
+    },
+    {
+      "kind": "passive",
+      "timestamp": "2026-01-15T09:02:00+09:00",
+      "location": {
+        "label": "home desk",
+        "lat": 35.68,
+        "lon": 139.76
+      },
+      "model_answer": "Scene shows a desk with an open laptop and a red bottle on the shelf.",
+      "camera_source": "eval_replay"
+    }
+  ],
+  "memory_questions": [
+    {
+      "id": "mq1",
+      "query_time_sec": 0.0,
+      "question": "Where did I put the red bottle?",
+      "gold_answer": "on the shelf",
+      "acceptable_answers": [
+        "shelf",
+        "on the shelf",
+        "on the bookshelf",
+        "the shelf"
+      ],
+      "unacceptable_answers": [
+        "desk",
+        "floor",
+        "table"
+      ],
+      "answerable": true,
+      "gold_evidence_windows": [
+        [
+          75.0,
+          120.0
+        ]
+      ]
+    },
+    {
+      "id": "mq2",
+      "query_time_sec": 0.0,
+      "question": "Did I open the laptop?",
+      "gold_answer": "yes",
+      "acceptable_answers": [
+        "yes",
+        "the laptop was opened",
+        "a laptop was open"
+      ],
+      "unacceptable_answers": [
+        "no"
+      ],
+      "answerable": true,
+      "gold_evidence_windows": [
+        [
+          25.0,
+          299.0
+        ]
+      ]
+    }
+  ]
+}
