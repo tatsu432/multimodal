@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     model       TEXT,
     config_json TEXT,
     summary_json TEXT,
+    n_videos    INTEGER,
     created_at  TEXT NOT NULL
 );
 
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS eval_results (
     result_id   INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      TEXT NOT NULL REFERENCES eval_runs(run_id),
     task        TEXT NOT NULL,
+    video_id    TEXT,
     question_id TEXT NOT NULL,
     question    TEXT,
     gold_answer TEXT,
@@ -77,12 +79,24 @@ CREATE TABLE IF NOT EXISTS eval_results (
 );
 """
 
+_MIGRATE_DDL = [
+    "ALTER TABLE eval_runs ADD COLUMN n_videos INTEGER",
+    "ALTER TABLE eval_results ADD COLUMN video_id TEXT",
+]
+
 
 def open_report_db(db_path: Path = _DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_DDL)
+    # Apply non-destructive migrations for existing DBs (ignore if column already exists)
+    for stmt in _MIGRATE_DDL:
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
@@ -105,10 +119,12 @@ class EvalReport:
         self._ltm_scores: list[LtmScore] = []
         self._ltm_question_meta: list[dict] = []  # gold answers for printing
         self._live_question_meta: list[dict] = []
+        self._video_ids: set[str] = set()
 
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         self._conn.execute(
-            "INSERT OR IGNORE INTO eval_runs (run_id, run_ts, task, manifest_id, model, config_json, created_at)"
+            "INSERT OR IGNORE INTO eval_runs"
+            " (run_id, run_ts, task, manifest_id, model, config_json, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 meta.run_id, now, meta.task, meta.manifest_id, meta.model,
@@ -126,20 +142,23 @@ class EvalReport:
         ask_at_sec: float,
         gold_answer: str,
         answer_type: str,
+        video_id: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         em = score.exact_match
         jd = score.judge
+        if video_id:
+            self._video_ids.add(video_id)
         self._conn.execute(
             """INSERT INTO eval_results (
-                run_id, task, question_id, question, gold_answer, system_answer,
+                run_id, task, video_id, question_id, question, gold_answer, system_answer,
                 answer_type, exact_match, is_abstention,
                 judge_score, judge_halluc_object, judge_halluc_time, judge_halluc_location,
                 judge_should_abstain, judge_rationale,
                 ask_at_sec, frame_age_sec, frames_used, latency_ms, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                self.meta.run_id, "live", question_id,
+                self.meta.run_id, "live", video_id, question_id,
                 question, gold_answer, system_answer,
                 answer_type, int(em.matched), int(em.is_abstention),
                 jd.score if not jd.skipped else None,
@@ -163,14 +182,17 @@ class EvalReport:
         gold_windows: list[tuple[float, float]],
         answer_type: str,
         retrieval_trace: list | None = None,
+        video_id: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         em = score.exact_match
         jd = score.judge
         ret = score.retrieval
+        if video_id:
+            self._video_ids.add(video_id)
         self._conn.execute(
             """INSERT INTO eval_results (
-                run_id, task, question_id, question, gold_answer, system_answer,
+                run_id, task, video_id, question_id, question, gold_answer, system_answer,
                 answer_type, exact_match, is_abstention,
                 judge_score, judge_halluc_object, judge_halluc_time, judge_halluc_location,
                 judge_should_abstain, judge_rationale,
@@ -178,9 +200,9 @@ class EvalReport:
                 recall_at_1, recall_at_3, recall_at_5, mrr,
                 min_temporal_dist_sec, evidence_iou,
                 latency_ms, retrieval_trace_json, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                self.meta.run_id, "ltm", question_id,
+                self.meta.run_id, "ltm", video_id, question_id,
                 question, gold_answer, system_answer,
                 answer_type, int(em.matched), int(em.is_abstention),
                 jd.score if not jd.skipped else None,
@@ -261,17 +283,37 @@ class EvalReport:
                     f"Q: {meta_q['question'][:45]}  {judge_str}"
                 )
 
-        print(f"\nResults stored → evals/outputs/eval_runs.sqlite  run_id={self.meta.run_id}")
+        n_videos = len(self._video_ids)
+        if n_videos > 1:
+            print(f"\nVideos evaluated : {n_videos}")
+        print(f"Results stored → evals/outputs/eval_runs.sqlite  run_id={self.meta.run_id}")
+
+    def finalize(self) -> dict:
+        """Write aggregated summary_json + n_videos back to eval_runs row.
+
+        Call once after all questions have been added. Returns the summary dict.
+        """
+        summary = {
+            "n_videos": len(self._video_ids),
+            "live": aggregate_live_scores(self._live_scores) if self._live_scores else {},
+            "ltm": aggregate_ltm_scores(self._ltm_scores) if self._ltm_scores else {},
+        }
+        self._conn.execute(
+            "UPDATE eval_runs SET summary_json=?, n_videos=? WHERE run_id=?",
+            (json.dumps(summary, default=str), len(self._video_ids) or None, self.meta.run_id),
+        )
+        self._conn.commit()
+        return summary
 
     def save_json(self, out_path: Path) -> None:
+        summary = self.finalize()
         data = {
             "run_id": self.meta.run_id,
             "task": self.meta.task,
             "manifest_id": self.meta.manifest_id,
             "model": self.meta.model,
             "config": self.meta.config_extra,
-            "live_summary": aggregate_live_scores(self._live_scores) if self._live_scores else {},
-            "ltm_summary": aggregate_ltm_scores(self._ltm_scores) if self._ltm_scores else {},
+            **summary,
         }
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(data, indent=2, default=str))

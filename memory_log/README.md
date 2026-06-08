@@ -401,24 +401,53 @@ cd memory_log
 # 1. Generate toy dataset (5-min synthetic video + manifest)
 uv run python -m evals.make_sample
 
-# 2. Live VQA eval (replay video → ask questions at specific timestamps)
+# 2. Live VQA eval — single video
 uv run python -m evals.run_live --manifest evals/datasets/toy/desk_001.json
 
-# 3. LTM eval — seed mode (inject structured past memories → ask recall questions)
+# 3. Live VQA eval — batch (N videos, one aggregated run_id)
+uv run python -m evals.run_live \
+    --manifest-dir evals/datasets/streaming_bench/ \
+    --n-videos 50 \
+    --no-judge \
+    --run-id sb_50_gpt4omini
+
+# 4. LTM eval — seed mode
 uv run python -m evals.run_ltm --manifest evals/datasets/toy/desk_001.json --memory-mode seed
 
-# 4. LTM eval — replay mode (ingest history video as passive observations → ask)
+# 5. LTM eval — replay mode
 uv run python -m evals.run_ltm --manifest evals/datasets/toy/desk_001.json --memory-mode replay
 
-# Options for both runners
+# Common options
 --model gpt-4o-mini       # override VLM_MODEL
---limit 5                 # evaluate only first N questions
---no-judge                # skip LLM judge (exact-match only)
---run-id my_run           # custom run ID
+--limit 5                 # max questions per manifest
+--no-judge                # exact-match only (faster, MCQ benchmarks don't need judge)
+--run-id my_run           # custom run ID for later comparison
 ```
 
-Results are written to `evals/outputs/eval_runs.sqlite` (one row per question) and a JSON
-summary file. Console output shows a dashboard-style breakdown.
+Results are written to `evals/outputs/eval_runs.sqlite` (one row per question, grouped by `run_id`)
+and a JSON summary file. Console output shows a dashboard-style breakdown.
+
+### Comparing runs
+
+```bash
+# List all run IDs in the database
+uv run python -m evals.compare --list
+
+# Compare two or more runs — outputs a standalone HTML report
+uv run python -m evals.compare \
+    sb_50_gpt4omini \
+    sb_50_gpt4o \
+    sb_50_llava \
+    --title "StreamingBench: model comparison" \
+    --out evals/outputs/comparison.html
+
+open evals/outputs/comparison.html
+```
+
+The HTML report shows a side-by-side metrics table (green = best, red = worst per metric)
+and interactive bar charts for all metrics. No server needed — open the file directly in any
+browser. Typical axes to compare: model (`--model`), memory mode (`--memory-mode`),
+token compression strategy, serving backend.
 
 ### Eval manifest format
 

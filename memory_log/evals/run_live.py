@@ -1,20 +1,19 @@
 """Live Visual QA evaluation runner.
 
-Replays a video file, asks each live_question from the manifest at the correct
-media timestamp, scores the system answer, and prints a summary report.
-
-Usage (from memory_log/):
+Single-manifest mode (one video):
     uv run python -m evals.run_live \\
         --manifest evals/datasets/toy/desk_001.json \\
-        [--model gpt-4o-mini] \\
-        [--num-frames 4] \\
-        [--window-sec 30] \\
-        [--limit 5] \\
-        [--no-judge] \\
-        [--run-id my_run_001]
+        [--model gpt-4o-mini] [--limit 5] [--no-judge] [--run-id my_run]
 
-Each run is written to evals/outputs/eval_runs.sqlite; a JSON summary is
-also written to evals/outputs/<run_id>_live.json.
+Batch mode (N videos — aggregates metrics across all manifests):
+    uv run python -m evals.run_live \\
+        --manifest-dir evals/datasets/streaming_bench/ \\
+        --n-videos 50 \\
+        [--model gpt-4o-mini] [--limit 10] [--no-judge] [--run-id sb_50_gpt4omini]
+
+Results go to evals/outputs/eval_runs.sqlite (one run_id, all questions).
+Compare runs with:
+    uv run python -m evals.compare <run_id_1> <run_id_2> ...
 """
 
 from __future__ import annotations
@@ -35,131 +34,59 @@ logger = logging.getLogger("evals.run_live")
 _EVALS_DIR = Path(__file__).parent
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Live VQA eval runner")
-    parser.add_argument(
-        "--manifest", required=True, type=Path, help="Path to EvalManifest JSON"
-    )
-    parser.add_argument("--model", default=None, help="Override VLM_MODEL env var")
-    parser.add_argument(
-        "--judge-model",
-        default="gpt-4o-mini",
-        help="LLM judge model (default: gpt-4o-mini)",
-    )
-    parser.add_argument(
-        "--num-frames",
-        type=int,
-        default=None,
-        help="Frames per query (default: from .env)",
-    )
-    parser.add_argument(
-        "--window-sec",
-        type=float,
-        default=30.0,
-        help="Lookback window for frame selection",
-    )
-    parser.add_argument(
-        "--sample-interval",
-        type=float,
-        default=1.0,
-        help="Replay source sampling interval (s)",
-    )
-    parser.add_argument(
-        "--limit", type=int, default=None, help="Max questions to evaluate"
-    )
-    parser.add_argument(
-        "--no-judge",
-        action="store_true",
-        help="Skip LLM judge (only exact-match scoring)",
-    )
-    parser.add_argument(
-        "--run-id", default=None, help="Unique run identifier (default: auto-generated)"
-    )
-    parser.add_argument(
-        "--out-dir", type=Path, default=_EVALS_DIR / "outputs", help="Output directory"
-    )
-    args = parser.parse_args(argv)
+def _collect_manifests(manifest_dir: Path, n_videos: int | None) -> list[Path]:
+    paths = sorted(manifest_dir.glob("*.json"))
+    if n_videos:
+        paths = paths[:n_videos]
+    return paths
 
-    manifest_path = args.manifest.resolve()
-    if not manifest_path.exists():
-        print(f"ERROR: manifest not found: {manifest_path}", file=sys.stderr)
-        return 1
 
-    # ---- imports (after path setup) ----
-    from evals.drivers import LiveAnswerResult, build_eval_config, run_live_question
-    from evals.manifest import load_manifest
-    from evals.replay_source import ReplaySource
-    from evals.report import EvalReport, RunMeta
-    from evals.scorers import JudgeResult, LiveScore, exact_or_alias_match, llm_judge
+def _eval_one_manifest(
+    manifest_path: Path,
+    report,
+    config,
+    args,
+    imports: dict,
+) -> int:
+    """Evaluate all questions in one manifest. Returns number of questions evaluated."""
+    load_manifest = imports["load_manifest"]
+    ReplaySource = imports["ReplaySource"]
+    run_live_question = imports["run_live_question"]
+    exact_or_alias_match = imports["exact_or_alias_match"]
+    JudgeResult = imports["JudgeResult"]
+    LiveScore = imports["LiveScore"]
+    llm_judge = imports["llm_judge"]
 
     manifest = load_manifest(manifest_path)
     manifest_dir = manifest_path.parent
 
-    run_id = (
-        args.run_id
-        or f"{manifest.video_id}_live_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-    )
-    run_dir = args.out_dir / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if not manifest.live_questions:
+        logger.info("  No live_questions in %s — skipped", manifest_path.name)
+        return 0
 
-    logger.info("Run ID: %s", run_id)
-    logger.info(
-        "Manifest: %s  (%d live questions)",
-        manifest_path.name,
-        len(manifest.live_questions),
-    )
-
-    # ---- config ----
-    extra_env: dict[str, str] = {}
-    if args.model:
-        extra_env["VLM_MODEL"] = args.model
-    config = build_eval_config(run_dir, extra_env)
-    logger.info("VLM model: %s", config.vlm_model)
-
-    # ---- replay source ----
     video_path = manifest.video_abs(manifest_dir)
     if not video_path.exists():
-        print(f"ERROR: video not found: {video_path}", file=sys.stderr)
-        return 1
+        logger.warning("  Video not found: %s — skipped", video_path)
+        return 0
 
-    replay = ReplaySource(
+    replay = imports["ReplaySource"](
         video_path,
         sample_interval_sec=args.sample_interval,
         base_timestamp=manifest.base_timestamp,
     )
-    logger.info("Loading replay source: %s", video_path.name)
     replay.load()
     logger.info(
-        "Duration: %.1fs  sampled frames: %d", replay.duration_sec(), len(replay._index)
-    )
-
-    # ---- report ----
-    report = EvalReport(
-        RunMeta(
-            run_id=run_id,
-            task="live",
-            manifest_id=manifest.video_id,
-            model=config.vlm_model,
-            config_extra={
-                "num_frames": args.num_frames or config.num_frames_per_query,
-                "window_sec": args.window_sec,
-                "sample_interval": args.sample_interval,
-                "judge": not args.no_judge,
-            },
-        )
+        "  %s  %.1fs  %d frames  %d questions",
+        manifest_path.name, replay.duration_sec(), len(replay._index),
+        len(manifest.live_questions),
     )
 
     questions = manifest.live_questions
     if args.limit:
         questions = questions[: args.limit]
 
-    logger.info("Evaluating %d live question(s)…", len(questions))
-
     for q in questions:
-        logger.info("  t=%.1fs  %s", q.ask_at_sec, q.question[:60])
-
-        # ---- call the real pipeline ----
-        result: LiveAnswerResult = run_live_question(
+        result = run_live_question(
             question_id=q.id,
             question=q.question,
             ask_at_sec=q.ask_at_sec,
@@ -169,9 +96,8 @@ def main(argv: list[str] | None = None) -> int:
             window_sec=args.window_sec,
             choices=q.choices if q.answer_type == "mcq" else None,
         )
-        logger.info("    → %s  (%.0fms)", result.system_answer[:80], result.latency_ms)
+        logger.info("    t=%.1fs  → %s  (%.0fms)", q.ask_at_sec, result.system_answer[:70], result.latency_ms)
 
-        # ---- exact match ----
         em = exact_or_alias_match(
             result.system_answer,
             q.gold_answer,
@@ -180,15 +106,12 @@ def main(argv: list[str] | None = None) -> int:
             q.answer_type,
         )
 
-        # ---- LLM judge ----
         judge = JudgeResult(score=0, skipped=True)
         if not args.no_judge and config.openai_api_key:
             gold_evidence = ""
             if q.gold_evidence_window:
                 s, e = q.gold_evidence_window
-                gold_evidence = (
-                    f"The event occurred between {s:.1f}s and {e:.1f}s in the video."
-                )
+                gold_evidence = f"The event occurred between {s:.1f}s and {e:.1f}s in the video."
             judge = llm_judge(
                 question=q.question,
                 gold_answer=q.gold_answer,
@@ -214,12 +137,109 @@ def main(argv: list[str] | None = None) -> int:
             ask_at_sec=q.ask_at_sec,
             gold_answer=q.gold_answer,
             answer_type=q.answer_type,
+            video_id=manifest.video_id,
         )
+
+    replay.release()
+    return len(questions)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Live VQA eval runner")
+
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--manifest", type=Path, help="Single manifest JSON path")
+    src.add_argument("--manifest-dir", type=Path, help="Directory of manifest JSONs (batch mode)")
+
+    parser.add_argument(
+        "--n-videos", type=int, default=None,
+        help="Max manifests to process in batch mode (default: all in directory)",
+    )
+    parser.add_argument("--model", default=None, help="Override VLM_MODEL env var")
+    parser.add_argument("--judge-model", default="gpt-4o-mini", help="LLM judge model")
+    parser.add_argument("--num-frames", type=int, default=None, help="Frames per query")
+    parser.add_argument("--window-sec", type=float, default=30.0, help="Frame lookback window (s)")
+    parser.add_argument("--sample-interval", type=float, default=1.0, help="Replay sampling interval (s)")
+    parser.add_argument("--limit", type=int, default=None, help="Max questions per manifest")
+    parser.add_argument("--no-judge", action="store_true", help="Skip LLM judge")
+    parser.add_argument("--run-id", default=None, help="Custom run identifier")
+    parser.add_argument("--out-dir", type=Path, default=_EVALS_DIR / "outputs", help="Output directory")
+    args = parser.parse_args(argv)
+
+    # ---- collect manifests ----
+    if args.manifest:
+        manifest_paths = [args.manifest.resolve()]
+        batch_label = manifest_paths[0].stem
+    else:
+        manifest_paths = _collect_manifests(args.manifest_dir.resolve(), args.n_videos)
+        if not manifest_paths:
+            print(f"ERROR: no manifests found in {args.manifest_dir}", file=sys.stderr)
+            return 1
+        batch_label = args.manifest_dir.name
+        logger.info("Batch mode: %d manifests from %s", len(manifest_paths), args.manifest_dir.name)
+
+    # ---- imports ----
+    from evals.drivers import build_eval_config, run_live_question
+    from evals.manifest import load_manifest
+    from evals.replay_source import ReplaySource
+    from evals.report import EvalReport, RunMeta
+    from evals.scorers import JudgeResult, LiveScore, exact_or_alias_match, llm_judge
+
+    imports = dict(
+        load_manifest=load_manifest,
+        ReplaySource=ReplaySource,
+        run_live_question=run_live_question,
+        exact_or_alias_match=exact_or_alias_match,
+        JudgeResult=JudgeResult,
+        LiveScore=LiveScore,
+        llm_judge=llm_judge,
+    )
+
+    # ---- run config (shared across all manifests) ----
+    run_id = args.run_id or f"{batch_label}_live_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    run_dir = args.out_dir / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    extra_env: dict[str, str] = {}
+    if args.model:
+        extra_env["VLM_MODEL"] = args.model
+    config = build_eval_config(run_dir, extra_env)
+
+    logger.info("Run ID : %s", run_id)
+    logger.info("Model  : %s", config.vlm_model)
+    logger.info("Videos : %d", len(manifest_paths))
+
+    report = EvalReport(
+        RunMeta(
+            run_id=run_id,
+            task="live",
+            manifest_id=batch_label,
+            model=config.vlm_model,
+            config_extra={
+                "n_videos": len(manifest_paths),
+                "num_frames": args.num_frames or config.num_frames_per_query,
+                "window_sec": args.window_sec,
+                "sample_interval": args.sample_interval,
+                "judge": not args.no_judge,
+                "limit_per_video": args.limit,
+            },
+        ),
+        db_path=args.out_dir / "eval_runs.sqlite",
+    )
+
+    # ---- evaluate all manifests ----
+    total_q = 0
+    for i, mp in enumerate(manifest_paths, 1):
+        logger.info("[%d/%d] %s", i, len(manifest_paths), mp.name)
+        total_q += _eval_one_manifest(mp, report, config, args, imports)
+
+    logger.info("Total questions evaluated: %d", total_q)
 
     # ---- summary ----
     report.print_summary()
     json_out = run_dir / f"{run_id}_live.json"
     report.save_json(json_out)
+    print(f"\nJSON report → {json_out}")
     return 0
 
 
