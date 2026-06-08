@@ -110,6 +110,17 @@ def build_eval_config(run_dir: Path, extra_env: dict[str, str] | None = None) ->
 
 # ---- live QA driver ----
 
+def _format_mcq_prompt(question: str, choices: list[str]) -> str:
+    """Wrap a question with labeled choices and a letter-first instruction."""
+    opts = "\n".join(choices)
+    return (
+        f"{question}\n\n"
+        f"Options:\n{opts}\n\n"
+        "Reply with the option letter (A, B, C, or D) on the first line, "
+        "then a brief explanation."
+    )
+
+
 def run_live_question(
     question_id: str,
     question: str,
@@ -118,12 +129,15 @@ def run_live_question(
     config: Config,
     num_frames: int | None = None,
     window_sec: float = 30.0,
+    choices: list[str] | None = None,
 ) -> LiveAnswerResult:
     """Answer one live question using frames from `replay` at `ask_at_sec`.
 
     Args:
         num_frames: override config.num_frames_per_query (useful for sweeping).
         window_sec: lookback window for frame selection.
+        choices: if provided (MCQ), the prompt is reformatted to include labeled
+                 options and ask the model to lead with a single letter.
     """
     n = num_frames if num_frames is not None else config.num_frames_per_query
     frames, items = replay.frames_at(ask_at_sec, n, window_sec=window_sec)
@@ -134,9 +148,11 @@ def run_live_question(
         latest_media_t = items[-1].timestamp - replay.base_epoch
         frame_age = ask_at_sec - latest_media_t
 
+    prompt = _format_mcq_prompt(question, choices) if choices else question
+
     vlm = create_vlm_client(config)
     t0 = time.monotonic()
-    answer = vlm.answer_question(question, frames, frame_items=items if items else None)
+    answer = vlm.answer_question(prompt, frames, frame_items=items if items else None)
     latency_ms = (time.monotonic() - t0) * 1000.0
 
     return LiveAnswerResult(

@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,16 +37,47 @@ _EVALS_DIR = Path(__file__).parent
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Live VQA eval runner")
-    parser.add_argument("--manifest", required=True, type=Path, help="Path to EvalManifest JSON")
+    parser.add_argument(
+        "--manifest", required=True, type=Path, help="Path to EvalManifest JSON"
+    )
     parser.add_argument("--model", default=None, help="Override VLM_MODEL env var")
-    parser.add_argument("--judge-model", default="gpt-4o-mini", help="LLM judge model (default: gpt-4o-mini)")
-    parser.add_argument("--num-frames", type=int, default=None, help="Frames per query (default: from .env)")
-    parser.add_argument("--window-sec", type=float, default=30.0, help="Lookback window for frame selection")
-    parser.add_argument("--sample-interval", type=float, default=1.0, help="Replay source sampling interval (s)")
-    parser.add_argument("--limit", type=int, default=None, help="Max questions to evaluate")
-    parser.add_argument("--no-judge", action="store_true", help="Skip LLM judge (only exact-match scoring)")
-    parser.add_argument("--run-id", default=None, help="Unique run identifier (default: auto-generated)")
-    parser.add_argument("--out-dir", type=Path, default=_EVALS_DIR / "outputs", help="Output directory")
+    parser.add_argument(
+        "--judge-model",
+        default="gpt-4o-mini",
+        help="LLM judge model (default: gpt-4o-mini)",
+    )
+    parser.add_argument(
+        "--num-frames",
+        type=int,
+        default=None,
+        help="Frames per query (default: from .env)",
+    )
+    parser.add_argument(
+        "--window-sec",
+        type=float,
+        default=30.0,
+        help="Lookback window for frame selection",
+    )
+    parser.add_argument(
+        "--sample-interval",
+        type=float,
+        default=1.0,
+        help="Replay source sampling interval (s)",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Max questions to evaluate"
+    )
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="Skip LLM judge (only exact-match scoring)",
+    )
+    parser.add_argument(
+        "--run-id", default=None, help="Unique run identifier (default: auto-generated)"
+    )
+    parser.add_argument(
+        "--out-dir", type=Path, default=_EVALS_DIR / "outputs", help="Output directory"
+    )
     args = parser.parse_args(argv)
 
     manifest_path = args.manifest.resolve()
@@ -61,17 +90,24 @@ def main(argv: list[str] | None = None) -> int:
     from evals.manifest import load_manifest
     from evals.replay_source import ReplaySource
     from evals.report import EvalReport, RunMeta
-    from evals.scorers import JudgeResult, LiveScore, ExactMatchResult, exact_or_alias_match, llm_judge
+    from evals.scorers import JudgeResult, LiveScore, exact_or_alias_match, llm_judge
 
     manifest = load_manifest(manifest_path)
     manifest_dir = manifest_path.parent
 
-    run_id = args.run_id or f"{manifest.video_id}_live_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    run_id = (
+        args.run_id
+        or f"{manifest.video_id}_live_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    )
     run_dir = args.out_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Run ID: %s", run_id)
-    logger.info("Manifest: %s  (%d live questions)", manifest_path.name, len(manifest.live_questions))
+    logger.info(
+        "Manifest: %s  (%d live questions)",
+        manifest_path.name,
+        len(manifest.live_questions),
+    )
 
     # ---- config ----
     extra_env: dict[str, str] = {}
@@ -93,7 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("Loading replay source: %s", video_path.name)
     replay.load()
-    logger.info("Duration: %.1fs  sampled frames: %d", replay.duration_sec(), len(replay._index))
+    logger.info(
+        "Duration: %.1fs  sampled frames: %d", replay.duration_sec(), len(replay._index)
+    )
 
     # ---- report ----
     report = EvalReport(
@@ -129,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             num_frames=args.num_frames,
             window_sec=args.window_sec,
+            choices=q.choices if q.answer_type == "mcq" else None,
         )
         logger.info("    → %s  (%.0fms)", result.system_answer[:80], result.latency_ms)
 
@@ -147,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
             gold_evidence = ""
             if q.gold_evidence_window:
                 s, e = q.gold_evidence_window
-                gold_evidence = f"The event occurred between {s:.1f}s and {e:.1f}s in the video."
+                gold_evidence = (
+                    f"The event occurred between {s:.1f}s and {e:.1f}s in the video."
+                )
             judge = llm_judge(
                 question=q.question,
                 gold_answer=q.gold_answer,

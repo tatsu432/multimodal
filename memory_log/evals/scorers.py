@@ -92,6 +92,29 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower().rstrip(".,!?"))
 
 
+# Matches a standalone option letter at the start of an answer or after "answer is/:"
+_MCQ_LEAD_RE = re.compile(r"^\s*([A-D])[\s.\):]", re.IGNORECASE)
+_MCQ_STATED_RE = re.compile(r"\b(?:answer(?:\s+is)?|option)[:\s]+([A-D])\b", re.IGNORECASE)
+_MCQ_GOLD_RE = re.compile(r"^\s*([A-D])[\s.\):]", re.IGNORECASE)
+
+
+def _extract_mcq_letter(answer: str) -> str | None:
+    """Return the option letter (A-D) the model chose, or None if not found."""
+    m = _MCQ_LEAD_RE.match(answer)
+    if m:
+        return m.group(1).upper()
+    m = _MCQ_STATED_RE.search(answer)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+def _gold_mcq_letter(gold_answer: str) -> str | None:
+    """Extract the option letter from a gold like 'D. Aeromexico and La Liga.'"""
+    m = _MCQ_GOLD_RE.match(gold_answer)
+    return m.group(1).upper() if m else None
+
+
 def exact_or_alias_match(
     system_answer: str,
     gold_answer: str,
@@ -108,9 +131,23 @@ def exact_or_alias_match(
         return ExactMatchResult(matched=is_abstention, is_abstention=is_abstention, answer_type=answer_type)
 
     if answer_type == "mcq":
-        # Accept if any acceptable answer appears as a substring
+        # Prefer letter-based matching: stable even when the VLM answers in free-form prose.
+        sys_letter = _extract_mcq_letter(system_answer)
+        gold_letter = _gold_mcq_letter(gold_answer)
+        if sys_letter is not None and gold_letter is not None:
+            return ExactMatchResult(
+                matched=(sys_letter == gold_letter),
+                is_abstention=is_abstention,
+                answer_type=answer_type,
+            )
+        # Fallback: substring match against option text.
+        # Also try with the "A. "/"B. " letter prefix stripped so free-form answers
+        # like "Aeromexico and La Liga" still match "D. Aeromexico and La Liga."
+        _strip_prefix = re.compile(r"^\s*[A-D][\.\)\s]\s*", re.IGNORECASE)
         all_ok = [_normalize(a) for a in [gold_answer] + acceptable]
-        matched = any(ok in norm_sys or norm_sys in ok for ok in all_ok)
+        all_ok_stripped = [_normalize(_strip_prefix.sub("", a)) for a in [gold_answer] + acceptable]
+        all_ok_combined = list(dict.fromkeys(all_ok + all_ok_stripped))  # deduplicate, preserve order
+        matched = any(ok in norm_sys or norm_sys in ok for ok in all_ok_combined)
         return ExactMatchResult(matched=matched, is_abstention=is_abstention, answer_type=answer_type)
 
     # short_text: exact or substring match against gold + acceptable_answers
