@@ -7,7 +7,8 @@ Act as a senior machine learning engineer / research engineer working on a Pytho
 Prioritize correctness, simple design, minimal diffs, type safety, and clear failure modes.
 Challenge unclear requirements before implementing large changes.
 If you generate a plan then you should write the plan into a new markdown file inside .claude/tasks folder for the corresponding task such as `task-name-plan.md` for `task-name-spec.md`.
-If you implement a new feature, you should update the corresponding part in README.md.
+If you implement a new feature, you should update the corresponding part in README.md with detailed explanation.
+You should be honest with the limitations and capabilities of the system.
 
 ## Bash command style
 - Avoid multiline quoted shell commands when possible.

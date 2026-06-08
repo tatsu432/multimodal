@@ -7,6 +7,7 @@
 *.jpg
 sampled_frames/
 *.jsonl
+*.json
 
 # Eval harness — generated videos and run outputs (manifests are tracked)
 memory_log/evals/datasets/**/*.mp4

@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "tabulate>=0.10.0",
+    "datasets>=5.0.0",
 ]
 
 [tool.uv.sources]

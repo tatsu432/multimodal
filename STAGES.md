@@ -418,7 +418,7 @@ After core memory layers exist:
 - **edge device support** Start using the NVIDIA edge device 
 - **efficient inference** Use a vLLM or a sort of more efficient vision-language model serving, but this should require GPUs-
 - **Reserach on long term memory or efficient infernece** Research on efficient inference or long-term memory-related work
-
+- **Voide** Enable voice streaming query
 ---
 
 ## Recommended order (current)

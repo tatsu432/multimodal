@@ -454,18 +454,82 @@ Manifests are JSON files describing one eval scenario. Key fields:
 
 ### Public benchmark adapters
 
-Convert external benchmark datasets into the manifest format:
+Convert external benchmark datasets into the manifest format. Use `--limit N` (videos, not questions)
+to keep early experiments cheap — start with 3–5, scale up once the pipeline looks right.
+
+#### StreamingBench (Live QA)
+
+900 videos · 4 500 MCQ questions · timestamps per question.
+Annotations stream from HuggingFace automatically (~500 KB, instant).
+Videos are ~203 GB total — download only what you need (see below).
 
 ```bash
-# StreamingBench (Live QA — MCQ with timestamps, HuggingFace)
-uv run python -m evals.adapters.streaming_bench --download --raw-dir evals/datasets/streaming_bench_raw/
-uv run python -m evals.adapters.streaming_bench --raw-dir evals/datasets/streaming_bench_raw/ --out-dir evals/datasets/streaming_bench/ --limit 50
-uv run python -m evals.run_live --manifest evals/datasets/streaming_bench/<id>.json --no-judge
+# Step 1 — stream annotations and generate N manifests (no video download needed yet)
+uv run python -m evals.adapters.streaming_bench \
+    --limit 5 \
+    --out-dir evals/datasets/streaming_bench/
 
-# EgoSchema (LTM — egocentric MCQ; videos require Ego4D access)
-uv run python -m evals.adapters.egoschema --download-qa --qa-json evals/datasets/egoschema_raw/questions.json
-uv run python -m evals.adapters.egoschema --qa-json evals/datasets/egoschema_raw/questions.json --video-dir /path/to/ego4d_clips/ --limit 20 --out-dir evals/datasets/egoschema/
-uv run python -m evals.run_ltm --manifest evals/datasets/egoschema/<uid>.json --memory-mode replay
+# Choose a specific task category (default: all 4 MCQ categories)
+uv run python -m evals.adapters.streaming_bench \
+    --configs Real_Time_Visual_Understanding \
+    --limit 5 \
+    --out-dir evals/datasets/streaming_bench/
+
+# Step 2 — run Live QA eval (MCQ → deterministic scoring, no LLM judge needed)
+uv run python -m evals.run_live \
+    --manifest evals/datasets/streaming_bench/<video_id>.json \
+    --no-judge \
+    --limit 10        # limit questions within a single manifest
+```
+
+**Manifests without videos** work for testing the metadata pipeline; the runner will error
+at frame-fetch time since the video path is a placeholder. To add real videos:
+
+```bash
+# Download individual sample videos from the StreamingBench GitHub:
+#   https://github.com/THUNLP-MT/StreamingBench  (Google Drive download script)
+# Place MP4s as sample_1.mp4, sample_2.mp4, … in a local directory, then:
+
+uv run python -m evals.adapters.streaming_bench \
+    --limit 5 \
+    --video-dir /path/to/streaming_bench_videos/ \
+    --out-dir evals/datasets/streaming_bench/
+```
+
+Available `--configs` (MCQ categories):
+- `Real_Time_Visual_Understanding` — 2 500 questions
+- `Sequential_Question_Answering` — 250 questions
+- `Contextual_Understanding` — 500 questions
+- `Omni_Source_Understanding` — 1 000 questions
+
+#### EgoSchema (LTM)
+
+Egocentric long-form MCQ (wearable-like). Videos require Ego4D access.
+
+```bash
+# Step 1 — download QA annotations (tiny JSON, no video needed)
+uv run python -m evals.adapters.egoschema \
+    --download-qa \
+    --qa-json evals/datasets/egoschema_raw/questions.json
+
+# Step 2 — generate manifests (placeholder video paths if no video-dir)
+uv run python -m evals.adapters.egoschema \
+    --qa-json evals/datasets/egoschema_raw/questions.json \
+    --limit 5 \
+    --out-dir evals/datasets/egoschema/
+
+# With local Ego4D clips:
+uv run python -m evals.adapters.egoschema \
+    --qa-json evals/datasets/egoschema_raw/questions.json \
+    --video-dir /path/to/ego4d_clips/ \
+    --limit 5 \
+    --out-dir evals/datasets/egoschema/
+
+# Step 3 — LTM eval (replay mode: ingest clip as passive observations, then ask)
+uv run python -m evals.run_ltm \
+    --manifest evals/datasets/egoschema/<uid>.json \
+    --memory-mode replay \
+    --observe-interval 30
 ```
 
 Add new benchmarks by subclassing `evals.adapters.base.BenchmarkAdapter` and implementing
