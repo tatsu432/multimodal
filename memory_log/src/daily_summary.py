@@ -8,7 +8,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-from src.config import Config, PROJECT_ROOT
+from src.config import PROJECT_ROOT, Config
 from src.db_writer import SQLiteWriter
 from src.ltm_query.evidence import aggregate_passive_observations
 from src.memory_db import open_db
@@ -67,7 +67,9 @@ def _build_day_context(
         for row in promoted_events:
             ts = (row["timestamp_local"] or row["start_ts_utc"] or "")[:16]
             loc = row["location_label"] or row["city"] or "unknown location"
-            summary = row["scene_summary"] or row["raw_vlm_output"] or "(no description)"
+            summary = (
+                row["scene_summary"] or row["raw_vlm_output"] or "(no description)"
+            )
             evt_id = row["event_id"]
             lines.append(f"- {ts}, {loc}: {summary[:200]} [id: {evt_id}]")
     else:
@@ -80,8 +82,10 @@ def _build_day_context(
             loc = row["location_label"] or row["city"] or ""
             loc_str = f" ({loc})" if loc else ""
             aq_id = row["active_query_id"]
-            lines.append(f"- {ts}{loc_str}, user asked: \"{row['user_question']}\" "
-                         f"answer: \"{(row['model_answer'] or '')[:150]}\" [id: {aq_id}]")
+            lines.append(
+                f'- {ts}{loc_str}, user asked: "{row["user_question"]}" '
+                f'answer: "{(row["model_answer"] or "")[:150]}" [id: {aq_id}]'
+            )
     else:
         lines.append("\nActive query memories: none recorded for this day.")
 
@@ -102,8 +106,16 @@ class DailySummaryGenerator:
         start_local = f"{date_local}T00:00:00{tz_offset[:3]}:{tz_offset[3:]}"
         end_local = f"{date_local}T23:59:59{tz_offset[:3]}:{tz_offset[3:]}"
         try:
-            start_utc = datetime.fromisoformat(start_local).astimezone(timezone.utc).isoformat(timespec="milliseconds")
-            end_utc = datetime.fromisoformat(end_local).astimezone(timezone.utc).isoformat(timespec="milliseconds")
+            start_utc = (
+                datetime.fromisoformat(start_local)
+                .astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+            )
+            end_utc = (
+                datetime.fromisoformat(end_local)
+                .astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+            )
         except ValueError:
             logger.error("Invalid date format: %r", date_local)
             raise
@@ -126,7 +138,10 @@ class DailySummaryGenerator:
 
         logger.info(
             "Day %s: %d passive, %d events, %d queries",
-            date_local, len(passive_rows), len(promoted_events), len(active_queries),
+            date_local,
+            len(passive_rows),
+            len(promoted_events),
+            len(active_queries),
         )
 
         day_context = _build_day_context(
@@ -137,8 +152,14 @@ class DailySummaryGenerator:
         try:
             parsed = json.loads(raw_output)
         except json.JSONDecodeError:
-            logger.warning("Could not parse summary JSON; using raw output as summary_text")
-            parsed = {"summary_text": raw_output, "major_places": [], "uncertainties": []}
+            logger.warning(
+                "Could not parse summary JSON; using raw output as summary_text"
+            )
+            parsed = {
+                "summary_text": raw_output,
+                "major_places": [],
+                "uncertainties": [],
+            }
 
         summary_text = parsed.get("summary_text", raw_output)
         major_places = parsed.get("major_places", [])
@@ -203,8 +224,8 @@ class DailySummaryGenerator:
             {"role": "user", "content": day_context},
         ]
         return ollama_chat(
-            self._config.vlm_model,
-            messages,
+            model=self._config.vlm_model,
+            messages=messages,
             base_url=self._config.ollama_base_url,
         ).strip()
 
@@ -238,6 +259,7 @@ def main() -> None:
         if config.vector_search_enabled:
             try:
                 from src.vector_index import create_memory_indexer
+
                 indexer = create_memory_indexer(config)
             except Exception as exc:
                 logger.warning("Could not create memory indexer: %s", exc)
