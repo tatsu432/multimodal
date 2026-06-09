@@ -87,6 +87,7 @@ When using `CAMERA_SOURCE=phone-webrtc`, enable the built-in HTTPS server:
 
 ```env
 LOCATION_SERVER_ENABLED=true
+LOCATION_SERVER_HOST=YOUR MAC IP ADDRESS
 LOCATION_SERVER_PORT=8765
 LOCATION_SERVER_CERT=../camera_test/mediamtx-certs/server.crt
 LOCATION_SERVER_KEY=../camera_test/mediamtx-certs/server.key
