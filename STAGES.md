@@ -419,6 +419,7 @@ After core memory layers exist:
 - **efficient inference** Use a vLLM or a sort of more efficient vision-language model serving, but this should require GPUs-
 - **Reserach on long term memory or efficient infernece** Research on efficient inference or long-term memory-related work
 - **Voide** Enable voice streaming query
+- **Multi-hop conversation**: Current system does not have multi-hop conversation so the system will forget what we talked even 1 second ago
 ---
 
 ## Recommended order (current)
