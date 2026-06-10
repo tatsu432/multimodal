@@ -413,7 +413,8 @@ After core memory layers exist:
 - **memory refinement** - Promoted Event memory is only based on active query memory, so we should first include some rule-based logic 
 - **Refine eval** Use a small set of public benchmarks
 - **goal alignment** We have to make sure whether we should set some goals first for each session
-- **instance related memory** We might have to deal with the memory about the instance, such as the identity of the person, because the current system cannot distinguish the actual instance of the object, such as you, from the other person Currently, the system is locally hosted, so we cannot use the camera outside of the local network. It would be better to separate services and expose the endpoint correctly
+- **instance related memory** We might have to deal with the memory about the instance, such as the identity of the person, because the current system cannot distinguish the actual instance of the object, such as you, from the other person Currently, the system is locally hosted, so we cannot use the camera outside of the local network. It would be better to separate services and expose the endpoint correctly.
+- object memory related 
 - **video streaming improvement** For smartphones, the video streaming has a bit of lag, and we have to figure out how to ensure truly real-time, stable streaming
 - **edge device support** Start using the NVIDIA edge device 
 - **efficient inference** Use a vLLM or a sort of more efficient vision-language model serving, but this should require GPUs-

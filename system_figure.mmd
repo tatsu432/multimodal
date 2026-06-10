@@ -1,0 +1,148 @@
+flowchart TD
+    %% =========================
+    %% Input Sources
+    %% =========================
+    subgraph INPUT["Input Sources"]
+        direction LR
+        Camera["Camera / Webcam\n(RTSP / WebRTC / local)"]
+        GPS["Phone GPS\n(HTTPS sidecar)"]
+    end
+
+    FrameBuffer["Frame ring buffer\n(CameraFrameSource)"]
+    Camera -->|"decoded frames"| FrameBuffer
+
+    %% =========================
+    %% Location Resolution
+    %% =========================
+    subgraph LOC["Location Resolution"]
+        direction LR
+        LocSrc["Config / GPS sidecar"]
+        Geocode["GeocodeClient\n(Nominatim + SQLite cache)"]
+        LocSrc --> Geocode
+    end
+    GPS --> LocSrc
+
+    %% =========================
+    %% Active QA
+    %% =========================
+    subgraph ACTIVE["Active QA  (src/main.py)"]
+        direction TD
+        AUser["User"]
+        VLM["VLM Client\n(OpenAI / Ollama)"]
+        AUser -->|"question"| VLM
+        FrameBuffer -->|"N sampled frames"| VLM
+        VLM -->|"answer"| AUser
+    end
+
+    %% =========================
+    %% Passive Observer
+    %% =========================
+    subgraph PASSIVE["Passive Observer  (src/passive_observer.py)"]
+        direction TD
+        PTick["Periodic tick\n(every N sec, no VLM)"]
+        PProc["phash + thumbnail\ncomputation"]
+        PTick --> PProc
+        FrameBuffer -.->|"latest frame"| PTick
+    end
+
+    %% =========================
+    %% Daily Summary
+    %% =========================
+    subgraph DAILY["Daily Summary  (src/daily_summary.py)"]
+        direction TD
+        DayLLM["LLM summarizer"]
+    end
+
+    %% =========================
+    %% SQLite Memory DB
+    %% =========================
+    subgraph DB["SQLite Memory DB  (outputs/memories.sqlite)"]
+        direction LR
+        PassiveObs[(passive_observations\nraw traces · thumbnails · phash)]
+        PromotedEvt[(promoted_events\nVLM answer · scene text · frames)]
+        ActiveQAT[(active_query_memories\nQ&A linked to event)]
+        DailySumT[(daily_summaries\nday-level digest)]
+        FramesT[(frames\nimage paths per event)]
+    end
+
+    %% =========================
+    %% Vector Index
+    %% =========================
+    ChromaDB[("ChromaDB\nvector index\n(per model, per table)")]
+
+    %% =========================
+    %% Write flows
+    %% =========================
+    Geocode -->|"LocationInfo"| VLM
+    VLM -->|"promoted_event + active_query\n+ frames rows"| PromotedEvt
+    VLM --> ActiveQAT
+    VLM --> FramesT
+    VLM -->|"legacy JSONL record"| JSONL["memories.jsonl"]
+
+    Geocode -->|"LocationInfo"| PProc
+    PProc -->|"obs row"| PassiveObs
+
+    PromotedEvt -->|"embed on write"| ChromaDB
+    ActiveQAT -->|"embed on write"| ChromaDB
+    DailySumT -->|"embed on write"| ChromaDB
+
+    DB -->|"day's passive + events + QA"| DayLLM
+    DayLLM -->|"summary_text + major_places"| DailySumT
+
+    %% =========================
+    %% LTM Query Pipeline
+    %% =========================
+    subgraph LTM["Long-Term Memory Query  (src/ltm_query/)"]
+        direction TD
+        LUser["User"]
+        Planner["QueryPlanner\n(LLM → RetrievalPlan:\nintent · time_range · location_filter\nsemantic_query · stores_to_query)"]
+        Retriever["MemoryRetriever\n(vector / LIKE / metadata\nper store)"]
+        Evidence["EvidencePack\nassembly"]
+        AnsGen["AnswerGenerator\n(LLM)"]
+        LUser -->|"long-term query"| Planner
+        Planner -->|"structured plan"| Retriever
+        Retriever -->|"rows + frame paths"| Evidence
+        Evidence -->|"formatted context"| AnsGen
+        AnsGen -->|"grounded answer"| LUser
+    end
+
+    QueryLog[("long_term_query_logs.sqlite\nobservability / eval telemetry")]
+
+    %% =========================
+    %% LTM read flows
+    %% =========================
+    PassiveObs -->|"location timeline"| Retriever
+    PromotedEvt -->|"visual events"| Retriever
+    ActiveQAT -->|"Q&A history"| Retriever
+    DailySumT -->|"day summaries"| Retriever
+    ChromaDB -->|"semantic candidates\n(ANN ranked ids)"| Retriever
+    AnsGen -->|"per-query I/O trace"| QueryLog
+
+    %% =========================
+    %% Browser Dashboard
+    %% =========================
+    Dashboard["Browser Dashboard\nhttp://127.0.0.1:8800/\nlive frame · Live QA · LTM query"]
+    FrameBuffer -.->|"live frame (SSE)"| Dashboard
+    DB -.->|"recent memories"| Dashboard
+
+    %% =========================
+    %% Styling
+    %% =========================
+    classDef input fill:#f0f9ff,stroke:#0284c7,stroke-width:2px,color:#111827;
+    classDef active fill:#e8f1ff,stroke:#2563eb,stroke-width:2px,color:#111827;
+    classDef passive fill:#f8fafc,stroke:#64748b,stroke-width:1.5px,color:#111827;
+    classDef db fill:#eafaf1,stroke:#16a34a,stroke-width:2px,color:#111827;
+    classDef vector fill:#f3e8ff,stroke:#9333ea,stroke-width:2px,color:#111827;
+    classDef ltm fill:#fff1f2,stroke:#dc2626,stroke-width:2px,color:#111827;
+    classDef daily fill:#fffbeb,stroke:#d97706,stroke-width:1.5px,color:#111827;
+    classDef util fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151;
+
+    class Camera,GPS input;
+    class FrameBuffer,LocSrc,Geocode,LOC input;
+    class AUser,VLM,ACTIVE active;
+    class PTick,PProc,PASSIVE passive;
+    class DayLLM,DAILY daily;
+    class PassiveObs,PromotedEvt,ActiveQAT,DailySumT,FramesT,DB db;
+    class ChromaDB vector;
+    class LUser,Planner,Retriever,Evidence,AnsGen,LTM ltm;
+    class JSONL,QueryLog,Dashboard util;
